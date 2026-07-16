@@ -1,0 +1,210 @@
+// freyaOMS — schéma de données
+//
+// Voir docs/DATABASE.md pour le raisonnement complet derrière chaque
+// modèle. Résumé des règles qui ne sont pas évidentes en lisant juste
+// les champs :
+//   - `Order.channel` et `Order.isConfirmed` sont calculés à l'ingestion
+//     (voir docs/SHOPIFY_SYNC.md) et dénormalisés ici pour que toutes les
+//     requêtes d'insights puissent filtrer/grouper sans recalculer la
+//     logique de tags à chaque fois.
+//   - Tous les insights (vitesse de vente, jours de stock restant,
+//     produits dormants) se filtrent sur `isConfirmed = true AND
+//     cancelledAt IS NULL` et se bucketent sur `orderCreatedAt`
+//     (la date de commande client, jamais une date de traitement).
+//   - Un seul stock global par variante : pas de table par location.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrderChannel {
+  B2B
+  B2C
+}
+
+enum SyncResource {
+  PRODUCTS
+  ORDERS
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+enum UserRole {
+  ADMIN
+  VIEWER
+}
+
+model Product {
+  id        String @id @default(cuid())
+  shopifyId BigInt @unique
+
+  title       String
+  vendor      String?
+  productType String?
+  status      String // Shopify: active | archived | draft
+
+  shopifyCreatedAt DateTime
+  shopifyUpdatedAt DateTime
+  syncedAt         DateTime @default(now())
+
+  variants Variant[]
+
+  @@index([status])
+}
+
+model Variant {
+  id        String @id @default(cuid())
+  shopifyId BigInt @unique
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // Shopify inventory_item_id — clé de jointure si on doit un jour
+  // revenir aux inventory levels (ex: passage au multi-location).
+  inventoryItemId BigInt @unique
+
+  sku     String?
+  barcode String?
+  title   String
+
+  // Dérivé à l'ingestion depuis le préfixe SKU (voir docs/SHOPIFY_SYNC.md,
+  // section "Règle de dérivation : isBlackMarket") : true si ce SKU
+  // représente une vente non déclarée ("au black"). C'est une dimension
+  // distincte de Order.channel (B2B/B2C) : celle-ci est au niveau de la
+  // commande, celle-là au niveau du SKU/variante.
+  isBlackMarket Boolean @default(false)
+
+  price          Decimal  @db.Decimal(12, 2)
+  compareAtPrice Decimal? @db.Decimal(12, 2)
+  cost           Decimal? @db.Decimal(12, 2)
+
+  // Dernière quantité connue (cache rapide pour les listes/tableaux).
+  // La vérité historique vit dans InventorySnapshot.
+  inventoryQuantity Int
+
+  shopifyUpdatedAt DateTime
+  syncedAt         DateTime @default(now())
+
+  snapshots InventorySnapshot[]
+  lineItems OrderLineItem[]
+
+  @@index([sku])
+  @@index([productId])
+  @@index([isBlackMarket])
+}
+
+// Série temporelle : une ligne par variante à chaque poll de synchro.
+// Permet de calculer tendances / vitesse d'épuisement sans webhooks
+// Shopify. Voir docs/INSIGHTS.md.
+model InventorySnapshot {
+  id String @id @default(cuid())
+
+  variantId String
+  variant   Variant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  quantity   Int
+  recordedAt DateTime @default(now())
+
+  @@index([variantId, recordedAt])
+}
+
+model Order {
+  id        String @id @default(cuid())
+  shopifyId BigInt @unique
+
+  name String // ex: "#1054"
+
+  // Dérivés à l'ingestion à partir des tags / statuts Shopify bruts.
+  // Voir docs/SHOPIFY_SYNC.md pour la règle exacte et son historique.
+  channel     OrderChannel
+  isConfirmed Boolean
+
+  tags              String[]
+  financialStatus   String?
+  fulfillmentStatus String?
+  cancelledAt       DateTime?
+
+  currency      String
+  subtotalPrice Decimal @db.Decimal(12, 2)
+  totalPrice    Decimal @db.Decimal(12, 2)
+
+  // Dénormalisés — pas de table Customer séparée en v1 (voir
+  // docs/DATABASE.md, section "Extensions futures").
+  customerEmail String?
+  customerName  String?
+  customerPhone String?
+
+  // LA date de référence pour tous les insights : date de commande
+  // côté client, jamais une date de traitement/confirmation.
+  orderCreatedAt   DateTime
+  shopifyUpdatedAt DateTime
+  syncedAt         DateTime @default(now())
+
+  lineItems OrderLineItem[]
+
+  @@index([orderCreatedAt])
+  @@index([channel, orderCreatedAt])
+  @@index([isConfirmed, cancelledAt])
+}
+
+model OrderLineItem {
+  id String @id @default(cuid())
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // Nullable : le variant peut avoir été supprimé côté Shopify après
+  // la commande. On garde les valeurs brutes en secours.
+  variantId         String?
+  variant           Variant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  shopifyVariantId  BigInt?
+  shopifyLineItemId BigInt @unique
+
+  sku   String?
+  title String
+
+  quantity      Int
+  unitPrice     Decimal @db.Decimal(12, 2)
+  totalDiscount Decimal @db.Decimal(12, 2) @default(0)
+
+  @@index([variantId])
+  @@index([orderId])
+}
+
+// Traçabilité de chaque poll de synchro : statut, curseur de reprise
+// incrémentale, erreurs. Voir docs/SHOPIFY_SYNC.md.
+model SyncRun {
+  id String @id @default(cuid())
+
+  resource SyncResource
+  status   SyncStatus
+
+  // Curseur de reprise : pageInfo.endCursor (backfill paginé) ou horodatage
+  // updated_at (polls incrémentaux), selon le type de run.
+  cursor String?
+
+  startedAt        DateTime  @default(now())
+  finishedAt       DateTime?
+  recordsProcessed Int       @default(0)
+  errorMessage     String?
+
+  @@index([resource, startedAt])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  role         UserRole @default(ADMIN)
+  createdAt    DateTime @default(now())
+}

@@ -1,0 +1,38 @@
+@AGENTS.md
+
+# freyaOMS
+
+Outil interne de gestion/insights de stock pour Freya, basé sur les commandes et produits Shopify (boutique unique gérant à la fois B2B et B2C via tags de commande). Monolithe Next.js (App Router) + TypeScript + PostgreSQL + Prisma — back et front dans le même projet.
+
+**Documentation détaillée (toujours consulter avant de modifier le schéma, la synchro ou les insights) :**
+- [`docs/DATABASE.md`](docs/DATABASE.md) — schéma Prisma et le *pourquoi* de chaque décision de modélisation.
+- [`docs/SHOPIFY_SYNC.md`](docs/SHOPIFY_SYNC.md) — stratégie de polling, règles de dérivation `channel`/`isConfirmed`, minimisation des appels API.
+- [`docs/INSIGHTS.md`](docs/INSIGHTS.md) — formules exactes (vitesse de vente, jours de stock, dormants, B2B vs B2C).
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — stack, structure des dossiers, déploiement.
+
+## Règles métier à ne jamais oublier
+
+1. **Un seul stock global** par variante (une seule location Shopify) — pas de multi-entrepôt à modéliser.
+2. **Channel** : `Order.tags` contient le tag littéral `"B2B"` → commande B2B ; absence de tag → B2C. Toujours dérivé à l'ingestion, jamais recalculé à la volée dans les requêtes d'insights.
+2bis. **Déclaré vs black** : `Variant.sku` préfixé `"B_"` → vente non déclarée (`isBlackMarket = true`), voir `docs/SHOPIFY_SYNC.md`/`src/lib/shopify/deriveVariantFields.ts`. Dérivé à l'ingestion des produits, comme `channel`. **Différence structurelle à ne jamais oublier** : c'est une propriété de la variante, pas de la commande (une commande peut mélanger déclaré et black) — donc tout insight qui ventile par `isBlackMarket` doit sommer par ligne de commande, jamais utiliser `Order.subtotalPrice` (voir `docs/INSIGHTS.md`, section 12). Si le préfixe change, relancer `npm run recompute:variants` plutôt que de re-synchroniser Shopify.
+3. **Confirmation de commande (Tunisie, paiement à la livraison)** : beaucoup de commandes sont annulées avant expédition. Une commande ne compte dans un insight que si `isConfirmed = true AND cancelledAt IS NULL`. Règle validée le 2026-07-15 sur 7375 commandes réelles (voir `docs/SHOPIFY_SYNC.md` et `src/lib/shopify/deriveOrderFields.ts`) : `isConfirmed` est faux si annulée, si `financial_status = VOIDED`, ou si `financial_status = PENDING` ET `fulfillment_status = UNFULFILLED` (commande ni payée ni expédiée — trop ambiguë). Si cette règle change, relancer `npm run recompute:orders` plutôt que de re-synchroniser Shopify.
+4. **La date de référence pour tout insight est `orderCreatedAt`** (date à laquelle le client a passé commande), jamais une date de traitement/confirmation/synchro.
+5. **Polling uniquement, pas de webhooks.** Minimiser au maximum les appels à l'API Shopify : Bulk Operations pour tout backfill complet, requêtes incrémentales filtrées `updated_at:>` pour les polls réguliers, throttle dynamique basé sur `extensions.cost.throttleStatus` (jamais de `sleep()` fixe). Voir `docs/SHOPIFY_SYNC.md`.
+6. **freyaOMS est volontairement indépendant de `APIs/shopify-back`** (l'autre backend Shopify du monorepo, `../../APIs/shopify-back`). Pas de lecture/écriture croisée entre les deux bases. Ne jamais modifier de fichiers en dehors de `tools/freyaOMS/`.
+7. Les insights (vitesse de vente, jours de stock restant, dormants) ne sont **jamais stockés** — toujours calculés à la demande depuis `Order`/`OrderLineItem`/`Variant`/`InventorySnapshot`.
+8. **`La Roche-Posay`, `CeraVe`, `FREYA Tunisie` (routines internes) et les `Pack`/`Pack Saint-Valentin` sont hors périmètre** — exclus dès la synchro (décision équipe 2026-07-16), voir `EXCLUDED_VENDORS`/`EXCLUDED_PRODUCT_TYPES` dans `src/lib/shopify/queries/products.ts` et `docs/SHOPIFY_SYNC.md`.
+9. **Réapprovisionnement** (`src/lib/insights/reorder.ts`) ne considère que les variantes avec une vitesse de vente réelle (`velocity(30) > 0`) — un produit dormant en rupture n'est pas une urgence de rachat. Hypothèses de délai fournisseur (`LEAD_TIME_DAYS`, `SAFETY_STOCK_DAYS`) sont globales v1, pas encore par marque — voir `docs/INSIGHTS.md` section 5. `TARGET_COVERAGE_DAYS` (défaut 90j = 3 mois) est réglable par l'utilisateur via le slider sur la page Réappro (`?coverage=`, borné 30-180j) — la constante n'est qu'un défaut, jamais figée en dur dans les calculs.
+10. **Tous les insights filtrables (marque/période) redescendent le filtre jusqu'à la requête Prisma/SQL**, jamais un filtrage a posteriori en JS sur des lignes déjà chargées — voir `docs/INSIGHTS.md`, section "Filtres marque et période".
+11. **Montants toujours affichés avec l'unité `TND`** (Dinar Tunisien, devise de la boutique) — via `formatCurrency()` dans `src/lib/format.ts`, jamais un nombre nu ni un `Intl.NumberFormat` local recréé ailleurs.
+12. **Le bouton "Actualiser" de l'Overview déclenche une vraie synchro Shopify** via une Server Action (`src/app/(dashboard)/syncActions.ts`), protégée par la session (pas de `CRON_SECRET` requis, contrairement à `/api/cron/sync`).
+
+## Conventions
+
+- IDs Shopify → toujours extraits du GID GraphQL et stockés en `BigInt`, jamais parsés en `Int`/`String` à la volée.
+- Montants → toujours `Decimal`, jamais `Float`.
+- Ce projet a été généré avec Next.js 16 : vérifier `node_modules/next/dist/docs/` avant d'utiliser une API dont le comportement pourrait avoir changé (voir `AGENTS.md`), ne pas se fier uniquement aux habitudes des versions précédentes. Le fichier de routage est `src/proxy.ts` (renommé depuis "middleware" en Next 16) — sa config DOIT rester edge-safe (`src/lib/auth/auth.config.ts`, sans Credentials/Prisma), jamais importer `src/lib/auth/auth.ts` depuis `proxy.ts`.
+- Couleurs de graphiques → toujours importées depuis `src/lib/theme/chartColors.ts` (palette validée par la skill `dataviz`), jamais piochées à la main. Un seul axe par graphique, toujours (jamais CA + unités sur le même graphique).
+- Les composants qui reçoivent des props depuis une Server Component (pages `page.tsx`) ne doivent jamais recevoir de **fonction** en prop (formatter, callback) si le composant est lui-même un Client Component (`"use client"`) rendu directement par une Server Component — ça casse la sérialisation RSC. Passer un identifiant (string/enum) et laisser le Client Component choisir sa fonction en interne (voir `ChannelMetricBarChart.tsx`). Un élément JSX déjà instancié (`<Icon />`) en prop est safe, contrairement à une référence de fonction/composant brute (`component={Link}`).
+- Un Client Component ne doit **jamais** importer, même indirectement, un fichier qui touche `@/lib/db` (Prisma) — ça casse le build (`pg` a besoin de modules Node natifs absents du bundle navigateur). D'où le split `src/lib/filterParams.ts` (pur, safe pour le client) / `src/lib/insights/filters.ts` (`getVendorList`, importe Prisma, server-only).
+- **Jamais de tiret cadratin (`—`) dans un texte affiché à l'utilisateur** (labels, titres, cellules de table, placeholders "pas de valeur"). Décision équipe du 2026-07-16. Utiliser une virgule, des parenthèses, un `:`, ou couper la phrase en deux à la place. Un placeholder "pas de valeur" s'écrit avec un tiret simple `-`, jamais `—`. Cette règle ne concerne que le texte réellement rendu dans l'UI, pas les commentaires de code.
+- **Tout contrôle de filtre qui pilote l'URL** (`FilterBar`, `CoverageControl`, et tout futur composant du même genre) doit utiliser `router.replace(url, { scroll: false })`, jamais `router.push(url)` sans options. `push` empile une entrée d'historique par changement (le bouton "retour" devient inutilisable après avoir joué avec un slider) et le scroll par défaut fait remonter la page en haut à chaque changement — décision équipe du 2026-07-16 après un signalement de "rechargement bizarre".

@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: freyaoms
+      POSTGRES_PASSWORD: freyaoms
+      POSTGRES_DB: freyaoms
+    ports:
+      - "5433:5432"
+    volumes:
+      - freyaoms_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  freyaoms_postgres_data:

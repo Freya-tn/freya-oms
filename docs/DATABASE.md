@@ -1,0 +1,38 @@
+# Base de données — raisonnement
+
+Schéma source : [`prisma/schema.prisma`](../prisma/schema.prisma). Ce document explique le **pourquoi**, pas le quoi (déjà lisible dans le schéma).
+
+## Principes directeurs
+
+1. **Un seul stock global par variante.** Freya n'a qu'une location Shopify à suivre pour la v1. `Variant.inventoryQuantity` est donc un simple entier, pas une table `InventoryLevel` par location. On garde quand même `inventoryItemId` (l'ID Shopify de l'inventory item) sur `Variant` : si le multi-location devient nécessaire, on pourra ajouter une table `InventoryLevel(variantId, locationId, quantity)` sans tout redessiner.
+
+2. **Le stock a une histoire, pas juste un état.** Comme la synchro est par polling (pas de webhooks Shopify), la seule façon de calculer une vitesse d'épuisement ou une tendance est de garder un historique. D'où `InventorySnapshot` : une ligne par variante à *chaque* poll de synchro produits. `Variant.inventoryQuantity` reste un cache de la dernière valeur connue, pour ne pas avoir à faire un `ORDER BY recordedAt DESC LIMIT 1` à chaque affichage de liste.
+
+3. **`channel` et `isConfirmed` sont calculés une fois, à l'ingestion, et dénormalisés sur `Order`.**
+   - Alternative rejetée : recalculer à la volée dans chaque requête d'insight (ex: `WHERE 'B2B' = ANY(tags)`). Rejeté parce que (a) c'est plus lent sur de gros volumes, (b) si la règle métier change (ex: un jour le tag devient `"Wholesale"` au lieu de `"B2B"`), on doit pouvoir *rejouer* la règle sur l'historique sans re-fetcher Shopify — d'où le fait que `tags`, `financialStatus` et `fulfillmentStatus` bruts sont conservés en plus des champs dérivés. Un script de backfill peut relire `tags`/statuts bruts et recalculer `channel`/`isConfirmed` pour toute la table `Order` si la règle évolue.
+   - Voir [`SHOPIFY_SYNC.md`](./SHOPIFY_SYNC.md) pour la règle de dérivation exacte.
+
+4. **Pas de table `Customer` en v1.** Les insights demandés (stock, vitesse de vente, B2B vs B2C, dormants) ne nécessitent pas d'agrégation par client. `Order.customerEmail/customerName/customerPhone` sont dénormalisés directement sur la commande. **Extension future documentée ici** : si un jour on veut des insights par client B2B (ex: top comptes grossistes), ajouter un modèle `Customer(shopifyId, email, company, ...)` et un `Order.customerId` FK, sans rien casser côté insights stock.
+
+5. **`OrderLineItem.variantId` est nullable.** Une commande passée il y a 6 mois peut référencer une variante supprimée depuis côté Shopify. On garde `shopifyVariantId` et `sku` bruts sur la ligne pour ne jamais perdre l'info produit même si la jointure casse (`onDelete: SetNull`, jamais `Cascade`, sur cette relation : supprimer une variante ne doit jamais supprimer l'historique de vente).
+
+6. **`orderCreatedAt` est LA date de référence pour tout, jamais une date de traitement.** Confirmé par l'équipe métier : en Tunisie le paiement est à la livraison, donc beaucoup de commandes sont annulées avant expédition, et une commande n'est "réelle" pour les insights que si elle est confirmée par téléphone. Mais la date qui compte pour analyser la demande / saisonnalité est celle où le client a *passé* la commande, pas celle où elle a été confirmée ou expédiée. Toutes les requêtes d'insights bucketent sur `orderCreatedAt` (voir [`INSIGHTS.md`](./INSIGHTS.md)).
+
+7. **BigInt pour tous les IDs Shopify.** Les IDs Shopify (product, variant, order, line item, inventory item) sont numériques mais peuvent dépasser `Number.MAX_SAFE_INTEGER` dans certains cas et sont exposés en GraphQL sous forme de GID (`gid://shopify/Order/123456789`). La convention dans ce projet : on extrait toujours la partie numérique du GID et on la stocke en `BigInt`, jamais en `Int`/`String` parsé à la volée.
+
+8. **Decimal pour tout ce qui est monétaire.** `price`, `cost`, `totalPrice`, etc. sont des `Decimal(12,2)`, jamais des `Float` — pour éviter les erreurs d'arrondi sur les agrégations de chiffre d'affaires/marge.
+   - **`OrderLineItem.totalDiscount`** : bug de mapping corrigé le 2026-07-16 (`src/lib/sync/syncOrders.ts`). Shopify expose `LineItem.discountedTotalSet` = le prix final de la ligne *après* remise (pas le montant de la remise) — le champ est calculé en base par `(quantity * unitPrice) - discountedTotalSet`, jamais assigné directement depuis `discountedTotalSet`. Voir `docs/INSIGHTS.md`, section "CA : Order.subtotalPrice vs somme des lignes de commande", pour la limite de précision qui persiste malgré cette correction (remises non allouées par Shopify au niveau de la ligne).
+
+9. **`Variant.isBlackMarket` : même principe de dénormalisation à l'ingestion que `channel`/`isConfirmed`, mais au niveau SKU, pas commande.** Décision équipe (2026-07-16) : les SKU préfixés `"B_"` représentent des ventes non déclarées ("au black"). Dérivé une fois dans `syncProducts.ts` (`deriveIsBlackMarket`, voir `docs/SHOPIFY_SYNC.md`) plutôt que recalculé à la volée (`sku LIKE 'B\_%'`) à chaque requête d'insight, pour rester cohérent avec le pattern déjà établi et pouvoir rejouer la règle sans re-synchroniser (`npm run recompute:variants`) si le préfixe change un jour. Différence importante avec `channel` : c'est une propriété de la **variante**, pas de la commande — une même commande peut mélanger des lignes déclarées et black, donc les insights qui l'utilisent (`getSaleTypeTotals`) ne peuvent jamais s'appuyer sur `Order.subtotalPrice` (voir `docs/INSIGHTS.md`).
+
+10. **Certains produits Shopify ne sont jamais synchronisés.** Décision équipe (2026-07-16) : `La Roche-Posay`, `CeraVe`, `FREYA Tunisie` (routines/bundles internes, vendor) et les types `Pack`/`Pack Saint-Valentin` sont hors périmètre de l'outil et exclus dès la requête Shopify (voir `EXCLUDED_VENDORS`/`EXCLUDED_PRODUCT_TYPES` dans `src/lib/shopify/queries/products.ts` et `docs/SHOPIFY_SYNC.md`). Conséquence pour le modèle : `OrderLineItem.variantId` peut être `null` pour des lignes de commande historiques référençant ces produits (la relation `Variant -> OrderLineItem` utilise `onDelete: SetNull`, jamais `Cascade`, précisément pour ce cas — l'historique de vente en CA/unités reste exact même sans variante liée, seuls les insights qui nécessitent une jointure `Variant` — stock, dormants, réappro, ABC — les excluent naturellement).
+
+## Insights : jamais stockés, toujours calculés
+
+Vitesse de vente, jours de stock restant, produits dormants/surstock : ce sont des requêtes sur `OrderLineItem` + `Order` + `InventorySnapshot`/`Variant`, pas des colonnes ou des tables. Voir [`INSIGHTS.md`](./INSIGHTS.md) pour les formules exactes et le filtre commun (`isConfirmed = true AND cancelledAt IS NULL`).
+
+## Index
+
+- `Order(orderCreatedAt)`, `Order(channel, orderCreatedAt)`, `Order(isConfirmed, cancelledAt)` — supportent directement les requêtes d'insights (filtrage confirmé/non-annulé, groupement par canal, fenêtres temporelles).
+- `InventorySnapshot(variantId, recordedAt)` — supporte les calculs de tendance par variante sur une fenêtre de temps.
+- `Variant(sku)` — recherche produit par SKU depuis l'UI.
