@@ -5,6 +5,7 @@ import { getMarginByChannel } from "@/lib/insights/margin";
 import { getVendorList } from "@/lib/insights/filters";
 import { parsePeriodParam, parseVendorParam } from "@/lib/filterParams";
 import { CHANNEL_COLOR } from "@/lib/theme/chartColors";
+import { formatMarginSublabel } from "@/lib/format";
 import { RevenueTrendChart } from "@/components/RevenueTrendChart";
 import { FilterBar } from "@/components/FilterBar";
 import { BarListChart } from "@/components/BarListChart";
@@ -13,7 +14,6 @@ export const dynamic = "force-dynamic";
 
 const DEFAULT_WINDOW_DAYS = 30;
 const TREND_WINDOW_DAYS = 90;
-const percentFormatter = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 0 });
 
 export default async function B2bB2cPage({
   searchParams,
@@ -37,10 +37,7 @@ export default async function B2bB2cPage({
   const marginItems = marginByChannel.map((m) => ({
     id: m.channel,
     label: m.channel,
-    sublabel:
-      m.marginRate !== null
-        ? `${percentFormatter.format(m.marginRate)} de marge (calculée sur ${percentFormatter.format(m.costCoverage)} du CA, le reste n'a pas de coût connu)`
-        : "coût non renseigné sur Shopify : marge impossible à calculer",
+    sublabel: formatMarginSublabel(m.marginRate, m.costCoverage),
     value: m.margin,
     color: CHANNEL_COLOR[m.channel],
   }));

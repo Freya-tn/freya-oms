@@ -5,7 +5,7 @@ import { getRevenueByProduct, getRevenueByCategory } from "@/lib/insights/produc
 import { getMarginByProduct, getMarginByVendor, getAbcClassificationByMargin } from "@/lib/insights/margin";
 import { getVendorList } from "@/lib/insights/filters";
 import { parsePeriodParam, parseVendorParam } from "@/lib/filterParams";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, formatMarginSublabel } from "@/lib/format";
 import { AbcTable } from "@/components/AbcTable";
 import { MarginAbcTable } from "@/components/MarginAbcTable";
 import { BarListChart } from "@/components/BarListChart";
@@ -15,7 +15,6 @@ export const dynamic = "force-dynamic";
 
 const DEFAULT_WINDOW_DAYS = 90;
 const TOP_N = 8;
-const percentFormatter = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 0 });
 
 export default async function ProduitsPage({
   searchParams,
@@ -127,10 +126,7 @@ export default async function ProduitsPage({
                 items={topMarginByVendor.map((row) => ({
                   id: row.id,
                   label: row.label,
-                  sublabel:
-                    row.marginRate !== null
-                      ? `${percentFormatter.format(row.marginRate)} de marge (calculée sur ${percentFormatter.format(row.costCoverage)} du CA, le reste n'a pas de coût connu)`
-                      : "coût non renseigné sur Shopify : marge impossible à calculer",
+                  sublabel: formatMarginSublabel(row.marginRate, row.costCoverage),
                   value: row.margin,
                 }))}
                 limit={TOP_N}
@@ -149,10 +145,7 @@ export default async function ProduitsPage({
                 items={topMarginByProduct.map((row) => ({
                   id: row.id,
                   label: row.label,
-                  sublabel:
-                    row.marginRate !== null
-                      ? `${percentFormatter.format(row.marginRate)} de marge (calculée sur ${percentFormatter.format(row.costCoverage)} du CA, le reste n'a pas de coût connu)`
-                      : "coût non renseigné sur Shopify : marge impossible à calculer",
+                  sublabel: formatMarginSublabel(row.marginRate, row.costCoverage),
                   value: row.margin,
                 }))}
                 limit={TOP_N}
