@@ -90,6 +90,25 @@ Route `POST /api/cron/sync` protégée par un header `Authorization: Bearer <CRO
 - **Auto-hébergé** : une entrée crontab système qui fait un `curl -X POST -H "Authorization: Bearer $CRON_SECRET"` vers la route.
 - **Manuellement depuis l'UI** : bouton "Actualiser" sur l'Overview → Server Action `triggerSyncAction` (`src/app/(dashboard)/syncActions.ts`), protégée par la session (le `proxy.ts` matche aussi les requêtes de Server Action car elles passent par la même route que la page). Après succès, `revalidatePath("/")` + `router.refresh()` côté client pour recharger les données affichées sans reload complet.
 
+## Topologie SSO Freya (portail, freyaOMS, Freya Hub)
+
+Depuis le 2026-07-18, freyaOMS n'est plus le seul outil interne accessible par Tailscale : **Freya Portal** (`tools/freyaPortal/`, nouveau) centralise l'accès à freyaOMS et à Freya Hub (`freya-front/`, comptabilité) avec **une seule authentification** pour les trois.
+
+**Topologie** : tout passe par le même hostname Tailscale (`ip-172-26-14-45.tail515d61.ts.net`, même certificat qu'avant, aucun nouveau certificat émis) :
+- `/` → Freya Portal (port 3002) — la racine, seul endroit où `signIn()` est appelé.
+- **`:8444`** (port dédié, PAS un sous-chemin `/oms`) → freyaOMS (proxy vers le port 3001 interne, totalement inchangé).
+- `/compta` → Freya Hub, build Vite statique (`freya-front/dist/`, `base: "/compta/"` + `basename="/compta"`), gaté par `nginx auth_request`.
+
+**Pourquoi un port dédié et pas `/oms`** : `basePath: "/oms"` a été tenté et abandonné - bug reproduit le 2026-07-18 (Next.js 16.2.10 + next-auth 5.0.0-beta.31 en local, `next start` avec Turbopack) où `proxy.ts` protégé par `auth()` reste bloqué **indéfiniment** (aucune réponse, jamais d'erreur) dès que `basePath` est activé sur `next.config.ts`, même en alignant `authConfig.basePath` (`/oms/api/auth`) comme la doc `@auth/core` le recommande. Un cookie de session est scopé par **hostname**, pas par port (RFC 6265) - un port dédié sur le même hostname partage donc la session tout aussi bien qu'un sous-chemin, sans ce bug. freyaOMS n'a donc **aucune modification de routing** : ni `basePath`, ni changement de `proxy.ts`, ni changement de la route cron (`http://localhost:3001/api/cron/sync` inchangée dans le crontab).
+
+**Mécanisme SSO** : freyaOMS partage le même `AUTH_SECRET` que Freya Portal (même variable d'env, copiée à la main dans les deux `.env`). NextAuth (v5, JWT strategy) chiffre le cookie de session avec une clé dérivée de `AUTH_SECRET` + le nom du cookie (`authjs.session-token` / `__Secure-...` en HTTPS) - identiques dans les deux apps, donc un cookie émis par le login du portail est accepté tel quel par le `auth()` de freyaOMS, sans jamais que freyaOMS n'appelle son propre `signIn()`. Vérifié en conditions réelles (curl + Playwright, 2026-07-18) : login une fois sur le portail → `freyaOMS:8444/api/auth/session` renvoie la session immédiatement, aucun écran de login revu. Le login propre de freyaOMS (`src/app/login/`) reste fonctionnel si on y accède directement (défense en profondeur), mais n'est jamais atteint dans le flux normal (portail → carte freyaOMS).
+
+**Freya Hub** (SPA statique, pas de notion de session serveur) est gaté différemment : `location /compta/` sur nginx utilise `auth_request` vers `GET /api/auth/verify` (nouvelle route sur le portail, appelle juste `auth()`, 200/401, pas de DB). Point d'attention nginx qui a coûté un vrai bug (2026-07-18) : la sous-requête interne doit explicitement forwarder `Cookie` (`proxy_set_header Cookie $http_cookie;`, pas transmis de façon fiable par défaut) **et** `Host`/`X-Forwarded-Proto` (sans ça, NextAuth voit `Host: localhost:3002` au lieu du vrai hostname et rejette une session pourtant valide - silencieusement, la sous-requête renvoie juste 401). `error_page 401 = @portal_login;` redirige vers `/login` plutôt que d'afficher un 401 brut.
+
+**`api.freya-hub.fr` (le backend de Freya Hub, port 3000) reste public, volontairement** : un webhook Shopify l'appelle depuis l'extérieur. Seul le FRONTEND (`freya-hub.fr`, les fichiers statiques) est coupé du public et déplacé sous `/compta` - ne jamais toucher au vhost `api.freya-hub.fr`.
+
+**Nouveau serveur Postgres** : Freya Portal a sa propre base (`freyaportal`, même instance Docker que `freyaoms`, rôle Postgres séparé) - jamais de migration croisée entre les deux projets.
+
 ## Formatage — devise TND
 
 Toute valeur monétaire affichée passe par `formatCurrency()` (`src/lib/format.ts`), qui ajoute systématiquement le suffixe ` TND` (Dinar Tunisien, devise de la boutique Shopify — confirmé via `shop.currencyCode` lors du premier test de connexion). Ne jamais recréer un `Intl.NumberFormat` local dans un composant pour formater un montant — toujours importer depuis `format.ts`. Les axes de graphiques utilisent `formatNumber()` (sans suffixe, pour rester compacts) ; seuls les tooltips et les valeurs affichées en dur (KPI, cellules de table) portent l'unité.
