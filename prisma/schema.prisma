@@ -30,6 +30,12 @@ enum OrderChannel {
 enum SyncResource {
   PRODUCTS
   ORDERS
+  FORECAST
+}
+
+enum ForecastScope {
+  GLOBAL
+  CATEGORY
 }
 
 enum SyncStatus {
@@ -234,4 +240,50 @@ model AlertAcknowledgment {
   alertKey       String   @unique
   acknowledgedAt DateTime @default(now())
   acknowledgedBy String?
+}
+
+// Prévisions de ventes (page Prévisions) — deuxième exception volontaire à
+// "les insights ne sont jamais stockés" (voir docs/DATABASE.md). Contrairement
+// à un insight recalculable à l'identique à tout instant, une prévision est
+// par nature un jugement figé au moment où elle a été faite : pour prouver
+// que l'algorithme devient "de plus en plus précis" (demande explicite), il
+// faut GARDER chaque prévision quotidienne telle qu'elle était ce jour-là,
+// jamais l'écraser — d'où une ligne par (scope, mois cible, jour de
+// génération), jamais un upsert. Voir docs/INSIGHTS.md, section "Prévisions
+// de ventes".
+model SalesForecast {
+  id     String        @id @default(cuid())
+  scope  ForecastScope
+  // "GLOBAL" (sentinel non-null) ou une valeur de Product.productType.
+  // Volontairement jamais null : NULL != NULL dans une contrainte @@unique
+  // Postgres, donc un scopeKey nullable pour GLOBAL ne serait PAS unique en
+  // pratique (plusieurs lignes GLOBAL/même mois/même jour pourraient
+  // coexister sans erreur) — piège identifié avant implémentation.
+  scopeKey String
+
+  targetYear  Int
+  targetMonth Int // 1-12
+  // Tronqué à minuit (UTC) — un forecast par (scope, cible, jour de génération).
+  generatedOn DateTime
+
+  predictedUnits   Float
+  predictedRevenue Decimal @db.Decimal(12, 2)
+
+  // Composantes du calcul, conservées pour audit/debug (voir forecast.ts).
+  baseUnitsRate   Float
+  seasonalIndex   Float
+  seasonalTrusted Boolean
+  growthFactor    Float
+  growthTrusted   Boolean
+
+  // Renseigné une fois le mois cible clos (voir reconcileClosedMonths).
+  actualUnits   Float?
+  actualRevenue Decimal?  @db.Decimal(12, 2)
+  reconciledAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([scope, scopeKey, targetYear, targetMonth, generatedOn])
+  @@index([scope, scopeKey, targetYear, targetMonth])
+  @@index([generatedOn])
 }

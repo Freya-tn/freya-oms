@@ -46,6 +46,13 @@ export function parseStockStatusParam(value: string | undefined): StockStatus | 
   return STOCK_STATUS_OPTIONS.some((option) => option.value === value) ? (value as StockStatus) : undefined;
 }
 
+/** Parse le paramètre `year` d'une URL — repli sur `fallback` si absent/invalide. */
+export function parseYearParam(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 2000 || parsed > 3000) return fallback;
+  return Math.round(parsed);
+}
+
 export const COVERAGE_DAYS_MIN = 30;
 export const COVERAGE_DAYS_MAX = 180;
 

@@ -58,6 +58,33 @@ velocityPerDay(variantId)  = weightedUnits(variantId) / weightSum
 
 `Variant.shopifyCreatedAt` (ajouté le 2026-07-18) vient du champ `createdAt` de l'API Shopify, absent pour les variantes synchronisées avant cette date tant que `npm run backfill:variant-created-at` n'a pas tourné (script ponctuel, un seul run nécessaire - la date de création ne change jamais). En son absence, `ageDays` est supposé égal au maximum (365j) plutôt que de sous-estimer une hypothétique variante récente sans données pour le prouver.
 
+## 15. Prévisions de ventes
+
+Demande explicite (2026-07-18) : prédire les chiffres de ventes du mois, de façon à devenir "de plus en plus précis jour après jour, mois après mois", pour aider à améliorer les prédictions de stock. Moteur dans `src/lib/insights/forecast.ts`, orchestration/cron dans `src/lib/sync/generateForecasts.ts`.
+
+**Principe directeur** : jamais de saisonnalité/croissance par SKU individuel - un SKU seul a souvent trop peu d'historique pour ça (voir section 1 : un SKU réel avec 3 ventes en 9 mois). Ces deux facteurs se calculent à un niveau agrégé (`GLOBAL` ou par `CATEGORY`, c'est-à-dire `Product.productType`), où le signal est statistiquement exploitable, et s'appliquent multiplicativement à un taux de base par SKU qui, lui, EST fiable individuellement (`getAdaptiveVelocityByVariant`, section précédente - réutilisé tel quel, jamais dupliqué).
+
+```
+forecast(scope, scopeKey, targetYear, targetMonth, asOf) =
+  actualUnitsToDate(scope, moisCible, jusqu'à asOf)                          -- RÉEL, jamais ré-estimé
+  + baseUnitsRate(scope, asOf) * joursRestants * seasonalIndex(mois) * growthFactor
+```
+
+- **Part réelle vs part extrapolée** : `actualUnitsToDate`/`actualRevenueToDate` sont les vraies ventes du mois cible depuis son début jusqu'à `asOf` (ou jusqu'à la fin du mois si déjà clos) - jamais ré-estimées. C'est ce qui rend la prévision "de plus en plus précise" : la part réelle grandit et la part extrapolée (`joursRestants`) rétrécit mécaniquement chaque jour, ce n'est pas un ajustement artificiel.
+- **`baseUnitsRate`** : somme de `velocityPerDay` (voir ci-dessus) de TOUTES les variantes du périmètre, y compris celles `confident: false` - agréger de nombreux signaux individuellement faibles lisse le bruit, contrairement à extrapoler un SKU seul (le garde-fou `confident` protège un cas différent, voir plus haut).
+- **`seasonalIndex(mois)`** : moyenne des unités de ce mois calendaire sur les années complètes disponibles, divisée par la moyenne des 12 indices mensuels (pas par le total brut / nombre de mois, ce qui biaiserait le dénominateur si un mois a plus d'historique qu'un autre). Neutre (1.0, `seasonalTrusted: false`) si moins de 3 années complètes distinctes pour ce mois - vérifié sur données réelles (2026-07-18) : l'historique par ligne de commande (jointure `Variant`) ne commence réellement qu'en octobre 2023 (pas dès fin 2022 comme le CA brut au niveau commande, voir la section CA ci-dessus), donc en juillet 2026 certains mois n'ont encore que 2 années complètes utilisables et restent volontairement neutres plutôt que d'afficher un indice basé sur trop peu de points.
+- **`growthFactor`** : ratio unités des 90 derniers jours vs la même fenêtre un an plus tôt. Neutre (1.0, `growthTrusted: false`) si moins de 3 commandes distinctes sur la fenêtre antérieure (rien de fiable à comparer). Volontairement PAS de repli sur une croissance mois-sur-mois : ça compterait deux fois le même signal ~30-60j déjà capté par l'EWMA de `baseUnitsRate`. Toujours borné à [0.3, 3.0] même quand fiable (jamais un pic ponctuel qui démultiplie une prévision par 10) - vérifié : la catégorie "Hydratant Visage" a un ratio brut supérieur à 3, correctement plafonné à ×3.00 dans l'UI plutôt que d'afficher un chiffre absurde.
+- **Conversion en TND** (`getAvgSellingPrice`) : UNE SEULE fois, à la toute fin (jamais mélangée dans les facteurs ci-dessus, pour ne pas empiler l'hypothèse "prix stable" plusieurs fois) - prix de vente moyen des 90 derniers jours ; repli sur le prix catalogue moyen (`Variant.price`) si aucune vente récente dans le périmètre. Limite v1 assumée : suppose un prix de vente moyen stable sur l'année - si le suivi de précision ci-dessous révèle un biais systématique un mois donné (ex: soldes), c'est le premier point à revisiter.
+- **CA du périmètre GLOBAL** : `Order.subtotalPrice`, comme partout ailleurs sans filtre produit (voir "CA : `Order.subtotalPrice` vs somme des lignes de commande" en haut de ce document) - vérifié : sommer par ligne de commande sur avril 2026 aurait surestimé le CA réel d'environ 23%, cohérent avec le biais déjà documenté. **CA du périmètre CATEGORY** : par ligne de commande (limite acceptée déjà documentée - pas d'alternative dès qu'un filtre produit est nécessaire).
+
+**Backtest de validation (2026-07-18)**, avant tout branchement cron/UI : `forecastForScope("GLOBAL", "GLOBAL", 2026, 4, asOf)` avec `asOf` après la clôture d'avril reproduit exactement le CA réel déjà connu (65 364,18 TND), puisqu'il n'y a alors plus rien à extrapoler ; avec `asOf` fixé au milieu du mois (16 avril), la prévision (602,6 unités / 58 493 TND) reste raisonnablement proche du réel final (698 unités / 65 364 TND) malgré `seasonalTrusted=false` pour ce mois à cette date - une erreur honnête, pas un résultat fabriqué à partir d'un signal trop pauvre.
+
+**`asOf` explicite partout** (jamais `new Date()` implicite dans le moteur, y compris dans `getAdaptiveVelocityByVariant` qui accepte désormais un `asOf` optionnel) : indispensable pour backtester sur un mois déjà clos sans fuite de données (une variante regardée "à cette date passée" ne doit jamais voir de ventes postérieures).
+
+**Stockage (exception documentée, voir `DATABASE.md`)** : `SalesForecast`, une ligne par (scope, scopeKey, mois cible, jour de génération) - jamais écrasée d'un jour à l'autre. C'est ce qui permet `getForecastAccuracy` (MAPE par délai de prévision, page Prévisions) de prouver concrètement que l'algorithme devient plus précis avec le temps, pas juste de l'affirmer. Génération quotidienne (mois courant + mois suivant, tous les scopes) et réconciliation des mois clos via `generateForecasts.ts`, câblées sur un cron dédié (`?resource=forecast`, voir `ARCHITECTURE.md`) - délibérément PAS dans le poll `resource=all` ni dans le bouton "Actualiser" de l'Overview (concept "une fois par jour", pas "à chaque poll").
+
+**Chip informatif sur la page Réappro** : `ReorderRow.category` (additif, n'entre dans AUCUN calcul de `getReorderSuggestions`) permet d'afficher l'indice de saisonnalité du mois PROCHAIN pour la catégorie de chaque suggestion - le réappro décidé aujourd'hui se vend dans les semaines à venir, pas ce mois-ci.
+
 ## 2. Jours de stock restant / date de rupture estimée
 
 ```
@@ -106,6 +133,8 @@ Toutes les métriques ci-dessus, groupées par `Order.channel` sur une même fen
 - Répartition du CA (`SUM(OrderLineItem.quantity * OrderLineItem.unitPrice)`) par canal.
 - Top produits par canal (classement séparé B2B / B2C, pas un classement global avec une colonne canal).
 - Marge par canal, si `Variant.cost` est renseigné : `(unitPrice - cost) * quantity`, sinon la métrique est simplement omise de l'UI plutôt que d'afficher un chiffre trompeur basé sur un cost manquant traité comme 0.
+
+**Moyenne mensuelle par canal, par année** (`getMonthlyChannelBreakdown`, ajouté 2026-07-18, retour utilisateur "combien on fait par mois en B2B et en B2C, avec la possibilité de voir les autres années") : CA confirmé par mois pour UNE année choisie (`?year=`, sélecteur `YearSelector.tsx`, défaut l'année en cours), splitté B2B/B2C. Comme `getChannelTotals` sans filtre marque : `Order.subtotalPrice`, pas une somme par ligne (voir "CA : `Order.subtotalPrice` vs somme des lignes de commande"). La moyenne mensuelle affichée (`avgPerMonth`) divise par `monthsWithData` (mois ayant au moins une vente), **pas toujours 12** : sur l'année en cours, diviser par 12 sous-estimerait la vraie moyenne des mois déjà écoulés (les mois futurs n'ont simplement pas encore de ligne) - le nombre de mois utilisé est affiché à côté de la moyenne dès qu'il est inférieur à 12.
 
 ## 5. Réapprovisionnement (reorder point & quantité suggérée)
 
@@ -255,6 +284,6 @@ Toutes les pages d'insights acceptent des filtres pilotés par l'URL (`?vendor=.
 
 ## Ce qui n'est délibérément PAS fait en v1
 
-- Pas de prévision de demande par modèle statistique (moyenne mobile simple seulement) — à envisager plus tard si la vitesse de vente simple s'avère insuffisante.
+- Prévisions de ventes (section 15) : uniquement aux niveaux GLOBAL et CATEGORY, pas par marque (vendor) — à envisager plus tard si le besoin se confirme, une fois plus de recul sur la fiabilité au niveau catégorie.
 - Pas de vues matérialisées Postgres — les requêtes directes sont suffisantes au volume actuel. À revisiter si les pages insights deviennent lentes.
 - Pas de modèle `Supplier`/délai fournisseur réel — `LEAD_TIME_DAYS` est une constante globale en attendant cette donnée (voir section 5).

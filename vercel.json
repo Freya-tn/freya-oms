@@ -1,6 +1,7 @@
 {
   "crons": [
     { "path": "/api/cron/sync?resource=products", "schedule": "0 * * * *" },
-    { "path": "/api/cron/sync?resource=orders", "schedule": "*/20 * * * *" }
+    { "path": "/api/cron/sync?resource=orders", "schedule": "*/20 * * * *" },
+    { "path": "/api/cron/sync?resource=forecast", "schedule": "0 4 * * *" }
   ]
 }

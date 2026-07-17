@@ -124,8 +124,17 @@ export type AdaptiveVelocity = {
 
 export async function getAdaptiveVelocityByVariant(
   filters: VelocityFilters = {},
+  // Optionnel — sert UNIQUEMENT au backtest du moteur de prévisions
+  // (forecast.ts), qui doit pouvoir se demander "qu'aurait-on calculé à cette
+  // date passée" sans voir de ventes postérieures. Sans borne haute sur
+  // orderCreatedAt, une variante "à cette date" verrait quand même les ventes
+  // réelles survenues APRÈS — une fuite de données qui rendrait tout backtest
+  // trompeur (toujours "juste", puisqu'il aurait triché). Par défaut (aucun
+  // asOf fourni, tous les appelants existants), `now` reste la date réelle,
+  // comportement strictement inchangé.
+  asOf?: Date,
 ): Promise<Map<string, AdaptiveVelocity>> {
-  const now = new Date();
+  const now = asOf ?? new Date();
   const lookbackFloor = new Date(now.getTime() - ADAPTIVE_MAX_LOOKBACK_DAYS * 86_400_000);
   // Négatif précalculé côté JS : un moins unaire directement sur un
   // paramètre lié rend l'opérateur `-` ambigu pour Postgres ("unknown" tant
@@ -156,6 +165,7 @@ export async function getAdaptiveVelocityByVariant(
       AND o."isConfirmed" = true
       AND o."cancelledAt" IS NULL
       AND o."orderCreatedAt" >= ${lookbackFloor}
+      AND o."orderCreatedAt" <= ${now}
       ${filters.channel ? Prisma.sql`AND o."channel" = ${filters.channel}` : Prisma.empty}
       ${filters.vendor ? Prisma.sql`AND p.vendor = ${filters.vendor}` : Prisma.empty}
       ${filters.category ? Prisma.sql`AND p."productType" = ${filters.category}` : Prisma.empty}

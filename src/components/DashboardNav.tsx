@@ -20,11 +20,13 @@ import ShoppingCartIcon from "@mui/icons-material/ShoppingCartOutlined";
 import CategoryIcon from "@mui/icons-material/CategoryOutlined";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOffOutlined";
 import NotificationsActiveIcon from "@mui/icons-material/NotificationsActiveOutlined";
+import TrendingUpIcon from "@mui/icons-material/TrendingUpOutlined";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview", icon: DashboardIcon },
   { href: "/alertes", label: "Alertes", icon: NotificationsActiveIcon },
   { href: "/stock", label: "Stock", icon: Inventory2Icon },
+  { href: "/previsions", label: "Prévisions", icon: TrendingUpIcon },
   { href: "/reorder", label: "Réapprovisionnement", icon: ShoppingCartIcon },
   { href: "/produits", label: "Produits", icon: CategoryIcon },
   { href: "/b2b-b2c", label: "B2B vs B2C", icon: CompareArrowsIcon },

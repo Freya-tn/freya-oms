@@ -25,6 +25,8 @@ export type ReorderRow = {
   title: string;
   productTitle: string;
   vendor: string | null;
+  /** Product.productType — affichage informatif seul (chip saisonnalité, voir docs/INSIGHTS.md), n'entre dans AUCUN calcul de cette fonction. */
+  category: string | null;
   inventoryQuantity: number;
   velocityPerDay: number;
   trend: DemandTrend;
@@ -69,7 +71,7 @@ export async function getReorderSuggestions(
         sku: true,
         title: true,
         inventoryQuantity: true,
-        product: { select: { title: true, vendor: true } },
+        product: { select: { title: true, vendor: true, productType: true } },
       },
     }),
     getVelocityByVariant(VELOCITY_WINDOW_DAYS, { vendor: filters.vendor }),
@@ -98,6 +100,7 @@ export async function getReorderSuggestions(
       title: variant.title,
       productTitle: variant.product.title,
       vendor: variant.product.vendor,
+      category: variant.product.productType,
       inventoryQuantity: variant.inventoryQuantity,
       velocityPerDay,
       trend: computeTrend(velocityPerDay, priorVelocity.get(variant.id) ?? 0),

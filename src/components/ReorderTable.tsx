@@ -29,7 +29,42 @@ const TREND_META: Record<DemandTrend, { label: string; icon: React.ReactElement;
   unknown: { label: "Historique insuffisant", icon: <HelpOutlineIcon fontSize="small" />, color: "text.secondary" },
 };
 
-const columns: GridColDef<ReorderRow>[] = [
+export type CategorySeasonality = { index: number; trusted: boolean };
+
+function buildColumns(categorySeasonality: Record<string, CategorySeasonality>): GridColDef<ReorderRow>[] {
+  return [
+    ...BASE_COLUMNS,
+    {
+      field: "category",
+      headerName: "Saisonnalité (mois prochain)",
+      width: 190,
+      sortable: false,
+      renderCell: (params) => {
+        const seasonality = params.value ? categorySeasonality[params.value as string] : undefined;
+        if (!seasonality) return <span>-</span>;
+        if (!seasonality.trusted) {
+          // Info-bulle native (attribut `title`), pas <Tooltip> : Tooltip clone
+          // son enfant et déclenche un hydration mismatch au premier rendu
+          // avec Chip en MUI v9/React 19 (voir la même note sur la page Prévisions).
+          return (
+            <span title="Moins de 3 années complètes d'historique pour cette catégorie : pas assez de recul pour en tirer un indice fiable, voir docs/INSIGHTS.md.">
+              <Chip label="Historique insuffisant" size="small" variant="outlined" />
+            </span>
+          );
+        }
+        const percent = Math.round((seasonality.index - 1) * 100);
+        const label = percent === 0 ? "Mois moyen" : `${percent > 0 ? "+" : ""}${percent}% vs mois moyen`;
+        return (
+          <span title="Indice de saisonnalité de cette catégorie pour le mois prochain, à titre informatif (n'entre pas dans le calcul de la suggestion de réappro ci-dessus) : voir la page Prévisions.">
+            <Chip label={label} size="small" color={percent > 0 ? "success" : percent < 0 ? "warning" : "default"} variant="outlined" />
+          </span>
+        );
+      },
+    },
+  ];
+}
+
+const BASE_COLUMNS: GridColDef<ReorderRow>[] = [
   {
     field: "urgency",
     headerName: "Urgence",
@@ -103,11 +138,17 @@ const columns: GridColDef<ReorderRow>[] = [
   },
 ];
 
-export function ReorderTable({ rows }: { rows: ReorderRow[] }) {
+export function ReorderTable({
+  rows,
+  categorySeasonality = {},
+}: {
+  rows: ReorderRow[];
+  categorySeasonality?: Record<string, CategorySeasonality>;
+}) {
   return (
     <DataGrid
       rows={rows}
-      columns={columns}
+      columns={buildColumns(categorySeasonality)}
       getRowId={(row) => row.variantId}
       initialState={{
         pagination: { paginationModel: { pageSize: 25 } },

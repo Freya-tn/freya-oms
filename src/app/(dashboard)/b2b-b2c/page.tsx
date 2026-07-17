@@ -1,14 +1,16 @@
-import { Card, CardContent, Grid, Typography } from "@mui/material";
-import { getChannelTotals, getTopProductsByChannel } from "@/lib/insights/channelComparison";
+import { Box, Card, CardContent, Grid, Typography } from "@mui/material";
+import { getChannelTotals, getMonthlyChannelBreakdown, getTopProductsByChannel } from "@/lib/insights/channelComparison";
 import { getRevenueTrend } from "@/lib/insights/orderTrend";
 import { getMarginByChannel } from "@/lib/insights/margin";
 import { getVendorList } from "@/lib/insights/filters";
-import { parsePeriodParam, parseVendorParam } from "@/lib/filterParams";
+import { parsePeriodParam, parseVendorParam, parseYearParam } from "@/lib/filterParams";
 import { CHANNEL_COLOR } from "@/lib/theme/chartColors";
-import { formatMarginSublabel } from "@/lib/format";
+import { formatCurrency, formatMarginSublabel } from "@/lib/format";
 import { RevenueTrendChart } from "@/components/RevenueTrendChart";
 import { FilterBar } from "@/components/FilterBar";
 import { BarListChart } from "@/components/BarListChart";
+import { MonthlyChannelChart } from "@/components/MonthlyChannelChart";
+import { YearSelector } from "@/components/YearSelector";
 
 export const dynamic = "force-dynamic";
 
@@ -18,18 +20,21 @@ const TREND_WINDOW_DAYS = 90;
 export default async function B2bB2cPage({
   searchParams,
 }: {
-  searchParams: Promise<{ vendor?: string; window?: string }>;
+  searchParams: Promise<{ vendor?: string; window?: string; year?: string }>;
 }) {
   const params = await searchParams;
   const vendor = parseVendorParam(params.vendor);
   const windowDays = parsePeriodParam(params.window, DEFAULT_WINDOW_DAYS);
+  const currentYear = new Date().getUTCFullYear();
+  const year = parseYearParam(params.year, currentYear);
 
-  const [totals, topProducts, revenueTrend, marginByChannel, vendors] = await Promise.all([
+  const [totals, topProducts, revenueTrend, marginByChannel, vendors, monthlyChannel] = await Promise.all([
     getChannelTotals(windowDays, { vendor }),
     getTopProductsByChannel(windowDays, 5, { vendor }),
     getRevenueTrend(TREND_WINDOW_DAYS),
     getMarginByChannel(windowDays, { vendor }),
     getVendorList(),
+    getMonthlyChannelBreakdown(year),
   ]);
 
   const revenueItems = totals.map((t) => ({ id: t.channel, label: t.channel, value: t.revenue, color: CHANNEL_COLOR[t.channel] }));
@@ -59,6 +64,38 @@ export default async function B2bB2cPage({
             CA confirmé ({TREND_WINDOW_DAYS} derniers jours)
           </Typography>
           <RevenueTrendChart data={revenueTrend} />
+        </CardContent>
+      </Card>
+
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 2, mb: 2 }}>
+            <Typography variant="h6" sx={{ mb: 0 }}>
+              Moyenne mensuelle par canal
+            </Typography>
+            <YearSelector years={[...new Set([...monthlyChannel.availableYears, year])].sort((a, b) => b - a)} value={year} />
+          </Box>
+          <Grid container spacing={4} sx={{ mb: 2 }}>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <Typography variant="overline" color="text.secondary">
+                B2B, moyenne / mois ({year}
+                {monthlyChannel.monthsWithData < 12 ? `, sur ${monthlyChannel.monthsWithData} mois` : ""})
+              </Typography>
+              <Typography variant="h5" sx={{ fontWeight: 700, color: CHANNEL_COLOR.B2B }}>
+                {formatCurrency(monthlyChannel.avgPerMonth.B2B)}
+              </Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <Typography variant="overline" color="text.secondary">
+                B2C, moyenne / mois ({year}
+                {monthlyChannel.monthsWithData < 12 ? `, sur ${monthlyChannel.monthsWithData} mois` : ""})
+              </Typography>
+              <Typography variant="h5" sx={{ fontWeight: 700, color: CHANNEL_COLOR.B2C }}>
+                {formatCurrency(monthlyChannel.avgPerMonth.B2C)}
+              </Typography>
+            </Grid>
+          </Grid>
+          <MonthlyChannelChart data={monthlyChannel.points} />
         </CardContent>
       </Card>
 

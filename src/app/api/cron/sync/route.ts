@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncProducts } from "@/lib/sync/syncProducts";
 import { syncOrders } from "@/lib/sync/syncOrders";
+import { generateForecastSync } from "@/lib/sync/generateForecasts";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,14 @@ export async function POST(request: NextRequest) {
     if (resource === "all" || resource === "orders") {
       await syncOrders();
       ran.push("orders");
+    }
+    // Volontairement PAS inclus dans "all" : la génération de prévisions est
+    // un concept "une fois par jour", pas "à chaque poll" (voir
+    // docs/ARCHITECTURE.md, section cron, et docs/INSIGHTS.md, "Prévisions
+    // de ventes") — cadence dédiée dans vercel.json.
+    if (resource === "forecast") {
+      await generateForecastSync();
+      ran.push("forecast");
     }
     return NextResponse.json({ ok: true, ran });
   } catch (error) {

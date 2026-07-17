@@ -7,8 +7,9 @@ import {
   TARGET_COVERAGE_DAYS,
 } from "@/lib/insights/reorder";
 import { getVendorList } from "@/lib/insights/filters";
+import { getSeasonalIndices } from "@/lib/insights/forecast";
 import { parseCoverageParam, parseVendorParam } from "@/lib/filterParams";
-import { ReorderTable } from "@/components/ReorderTable";
+import { ReorderTable, type CategorySeasonality } from "@/components/ReorderTable";
 import { FilterBar } from "@/components/FilterBar";
 import { SupplierOrderSummaryTable } from "@/components/SupplierOrderSummary";
 import { TopUrgencyChart } from "@/components/TopUrgencyChart";
@@ -31,6 +32,22 @@ export default async function ReorderPage({
     getVendorList(),
   ]);
   const supplierSummary = groupReorderByVendor(rows);
+
+  // Chip informatif (lecture seule, n'entre dans AUCUN calcul ci-dessus) :
+  // saisonnalité du mois PROCHAIN pour chaque catégorie présente dans les
+  // suggestions — le réappro décidé aujourd'hui sera vendu dans les semaines
+  // à venir, pas ce mois-ci. Voir docs/INSIGHTS.md, "Prévisions de ventes".
+  const now = new Date();
+  const nextMonth = ((now.getUTCMonth() + 1) % 12) + 1;
+  const categories = [...new Set(rows.map((r) => r.category).filter((c): c is string => !!c))];
+  const categorySeasonality: Record<string, CategorySeasonality> = {};
+  await Promise.all(
+    categories.map(async (category) => {
+      const indices = await getSeasonalIndices("CATEGORY", category, now);
+      const entry = indices[nextMonth - 1];
+      categorySeasonality[category] = { index: entry.index, trusted: entry.trusted };
+    }),
+  );
 
   return (
     <>
@@ -84,7 +101,7 @@ export default async function ReorderPage({
             </Grid>
           </Grid>
 
-          <ReorderTable rows={rows} />
+          <ReorderTable rows={rows} categorySeasonality={categorySeasonality} />
         </>
       )}
     </>
