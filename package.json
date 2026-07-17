@@ -13,6 +13,7 @@
     "db:studio": "prisma studio",
     "recompute:orders": "tsx src/scripts/recomputeOrderFields.ts",
     "recompute:variants": "tsx src/scripts/recomputeVariantFields.ts",
+    "backfill:variant-created-at": "tsx src/scripts/backfillVariantCreatedAt.ts",
     "prune:excluded-products": "tsx src/scripts/pruneExcludedProducts.ts"
   },
   "dependencies": {

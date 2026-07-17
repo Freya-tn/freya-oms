@@ -1,7 +1,7 @@
 "use client";
 
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
-import { Chip, Link as MuiLink } from "@mui/material";
+import { Chip, Link as MuiLink, Tooltip } from "@mui/material";
 import NextLink from "next/link";
 import type { StockRow } from "@/lib/insights/stockDays";
 
@@ -28,12 +28,29 @@ const columns: GridColDef<StockRow>[] = [
     headerName: "Ventes/jour",
     width: 130,
     type: "number",
-    valueFormatter: (value: number | null) => (value === null ? "-" : value.toFixed(2)),
+    renderCell: (params) => {
+      const { value, row } = params;
+      if (value === null) return <span>-</span>;
+      const days = row.effectiveWindowDays !== null ? Math.round(row.effectiveWindowDays) : null;
+      const text = (value as number).toFixed(2);
+      const windowNote =
+        days !== null
+          ? `Calculée sur les ${days} derniers jours (${days < 365 ? "produit ajouté récemment, jamais dilué par une période antérieure à sa création" : "1 an d'historique, ventes récentes pondérées plus fort"}).`
+          : "Ancienneté de la variante inconnue.";
+      const confidenceNote = row.velocityConfident
+        ? ""
+        : " Pas assez de ventes récentes pour en déduire un nombre de jours restants fiable : ce chiffre reste indicatif, mais aucune extrapolation n'est affichée dans la colonne \"Jours restants\".";
+      return (
+        <Tooltip title={windowNote + confidenceNote}>
+          <span>{text}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     field: "sellThroughRate",
     headerName: "Taux d'écoulement",
-    width: 150,
+    width: 160,
     type: "number",
     valueFormatter: (value: number | null) => (value === null ? "-" : percentFormatter.format(value)),
   },

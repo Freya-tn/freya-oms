@@ -91,6 +91,15 @@ model Variant {
   // La vérité historique vit dans InventorySnapshot.
   inventoryQuantity Int
 
+  // Date de création côté Shopify — nécessaire pour ne pas sous-estimer la
+  // vitesse de vente d'une variante récemment ajoutée (voir docs/INSIGHTS.md,
+  // "Vitesse de vente : produits récemment ajoutés"). Nullable : les
+  // variantes synchronisées avant l'introduction de ce champ (2026-07-18)
+  // n'en ont pas tant que `npm run backfill:variant-created-at` n'a pas
+  // tourné — en son absence, la vitesse de vente suppose prudemment que la
+  // variante existe depuis le début de la fenêtre demandée (comportement
+  // identique à avant ce correctif, jamais une erreur).
+  shopifyCreatedAt DateTime?
   shopifyUpdatedAt DateTime
   syncedAt         DateTime @default(now())
 

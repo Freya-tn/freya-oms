@@ -141,6 +141,7 @@ async function upsertProduct({ product, variants }: ProductWithVariants) {
         cost: variant.inventoryItem.unitCost?.amount ?? null,
         inventoryQuantity: variant.inventoryQuantity ?? 0,
         isBlackMarket: deriveIsBlackMarket(variant.sku),
+        shopifyCreatedAt: new Date(variant.createdAt),
         shopifyUpdatedAt: new Date(variant.updatedAt),
       },
       update: {
@@ -152,6 +153,7 @@ async function upsertProduct({ product, variants }: ProductWithVariants) {
         cost: variant.inventoryItem.unitCost?.amount ?? null,
         inventoryQuantity: variant.inventoryQuantity ?? 0,
         isBlackMarket: deriveIsBlackMarket(variant.sku),
+        shopifyCreatedAt: new Date(variant.createdAt),
         shopifyUpdatedAt: new Date(variant.updatedAt),
         syncedAt: new Date(),
       },

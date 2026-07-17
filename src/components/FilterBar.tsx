@@ -11,6 +11,7 @@ const PERIOD_LABEL: Record<number, string> = {
   60: "60 derniers jours",
   90: "90 derniers jours",
   180: "180 derniers jours",
+  365: "365 derniers jours (1 an)",
 };
 
 export type ExtraSelectFilter = {

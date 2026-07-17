@@ -4,7 +4,7 @@
 // Un Client Component qui importe, même indirectement, `@/lib/db` fait
 // planter le bundle browser (pg a besoin de modules Node natifs).
 
-export const PERIOD_OPTIONS = [7, 30, 60, 90, 180] as const;
+export const PERIOD_OPTIONS = [7, 30, 60, 90, 180, 365] as const;
 export type PeriodDays = (typeof PERIOD_OPTIONS)[number];
 
 /** Parse le paramètre `window` d'une URL (searchParams) en nombre de jours valide, avec repli. */
@@ -36,7 +36,7 @@ export const STOCK_STATUS_OPTIONS = [
   { value: "critical", label: "Critique (< 7 j)" },
   { value: "low", label: "Faible (< 21 j)" },
   { value: "ok", label: "Ok" },
-  { value: "unknown", label: "Pas de vente (30j)" },
+  { value: "unknown", label: "Pas de vente récente" },
 ] as const;
 
 export type StockStatus = (typeof STOCK_STATUS_OPTIONS)[number]["value"];

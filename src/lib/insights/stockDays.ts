@@ -1,8 +1,6 @@
 import { prisma } from "@/lib/db";
 import type { StockStatus } from "@/lib/filterParams";
-import { getVelocityByVariant } from "./velocity";
-
-const VELOCITY_WINDOW_DAYS = 30;
+import { getAdaptiveVelocityByVariant } from "./velocity";
 
 export type StockRow = {
   variantId: string;
@@ -12,6 +10,9 @@ export type StockRow = {
   vendor: string | null;
   inventoryQuantity: number;
   velocityPerDay: number | null;
+  effectiveWindowDays: number | null;
+  /** Faux si le signal de vente est trop pauvre pour extrapoler "jours restants" (voir velocity.ts) — même si velocityPerDay a une valeur. */
+  velocityConfident: boolean;
   daysOfStock: number | null;
   estimatedStockoutDate: Date | null;
   sellThroughRate: number | null;
@@ -35,8 +36,12 @@ function computeStockStatus(inventoryQuantity: number, daysOfStock: number | nul
 /**
  * Vue "stock" complète : niveau actuel + vitesse de vente + jours restants
  * + date de rupture estimée + taux d'écoulement, pour toutes les variantes
- * (filtrable par marque et par catégorie). Voir docs/INSIGHTS.md, section 2,
- * pour les cas limites (velocity = 0, inventoryQuantity = 0).
+ * (filtrable par marque et par catégorie). Vitesse de vente calculée par
+ * `getAdaptiveVelocityByVariant` (voir velocity.ts) — pas de fenêtre fixe
+ * choisie par l'utilisateur : l'algorithme s'adapte lui-même à l'ancienneté
+ * de chaque variante et pondère les ventes récentes plus fort, voir
+ * docs/INSIGHTS.md, section "Vitesse de vente adaptative (page Stock)".
+ * Voir aussi section 2 pour les cas limites (velocity = 0, inventoryQuantity = 0).
  */
 export async function getStockOverview(filters: { vendor?: string; category?: string } = {}): Promise<StockRow[]> {
   const [variants, velocity] = await Promise.all([
@@ -59,15 +64,22 @@ export async function getStockOverview(filters: { vendor?: string; category?: st
       },
       orderBy: { syncedAt: "desc" },
     }),
-    getVelocityByVariant(VELOCITY_WINDOW_DAYS, { vendor: filters.vendor, category: filters.category }),
+    getAdaptiveVelocityByVariant({ vendor: filters.vendor, category: filters.category }),
   ]);
 
   return variants.map((variant) => {
-    const velocityPerDay = velocity.get(variant.id) ?? null;
-    const hasVelocity = velocityPerDay !== null && velocityPerDay > 0;
+    const adaptive = velocity.get(variant.id) ?? null;
+    const velocityPerDay = adaptive?.velocityPerDay ?? null;
+    // "jours restants" n'est extrapolé que si le signal est jugé fiable
+    // (`confident`, voir velocity.ts) — sinon on préfère dire "on ne sait
+    // pas" plutôt que d'afficher un nombre fabriqué à partir d'un historique
+    // trop pauvre/trop ancien (ex réel du 2026-07-18 : "11896 jours" pour une
+    // variante à 3 ventes au total, rien depuis 86 jours). `velocityPerDay`
+    // reste affiché tel quel (contexte utile), seule l'extrapolation est gatée.
+    const canEstimateStockout = adaptive !== null && adaptive.confident && velocityPerDay !== null && velocityPerDay > 0;
 
     const daysOfStock =
-      variant.inventoryQuantity === 0 ? 0 : hasVelocity ? variant.inventoryQuantity / velocityPerDay! : null;
+      variant.inventoryQuantity === 0 ? 0 : canEstimateStockout ? variant.inventoryQuantity / velocityPerDay! : null;
 
     const estimatedStockoutDate =
       daysOfStock === null
@@ -78,10 +90,12 @@ export async function getStockOverview(filters: { vendor?: string; category?: st
             return date;
           })();
 
-    // Taux d'écoulement = unités vendues / (unités vendues + stock restant) —
-    // classique en gestion de stock : proche de 1 = ça tourne bien, proche de
-    // 0 = surstock relatif à la demande.
-    const unitsSold = hasVelocity ? velocityPerDay! * VELOCITY_WINDOW_DAYS : 0;
+    // Taux d'écoulement = unités vendues (brutes, sur la fenêtre adaptative
+    // de cette variante) / (unités vendues + stock restant) — classique en
+    // gestion de stock : proche de 1 = ça tourne bien, proche de 0 = surstock
+    // relatif à la demande. Volontairement PAS pondéré comme velocityPerDay
+    // (formule simple, comparable à ce qui est documenté depuis le début).
+    const unitsSold = adaptive?.unitsInWindow ?? 0;
     const sellThroughRate =
       unitsSold + variant.inventoryQuantity > 0 ? unitsSold / (unitsSold + variant.inventoryQuantity) : null;
 
@@ -93,6 +107,8 @@ export async function getStockOverview(filters: { vendor?: string; category?: st
       vendor: variant.product.vendor,
       inventoryQuantity: variant.inventoryQuantity,
       velocityPerDay,
+      effectiveWindowDays: adaptive?.effectiveWindowDays ?? null,
+      velocityConfident: adaptive?.confident ?? false,
       daysOfStock,
       estimatedStockoutDate,
       sellThroughRate,

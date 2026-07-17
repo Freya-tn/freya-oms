@@ -33,7 +33,30 @@ velocity(variantId, windowDays) =
   / windowDays
 ```
 
-Peut être splitté par `Order.channel` pour comparer la vitesse B2B vs B2C sur le même produit.
+Peut être splitté par `Order.channel` pour comparer la vitesse B2B vs B2C sur le même produit. Utilisée par `reorder.ts` (30j) et `dormant.ts` (60j), qui répondent chacun à une question précise ("est-ce chaud maintenant ?", "est-ce que ça a arrêté de bouger ?") où une fenêtre fixe et courte est justement le bon choix. La page Stock, elle, utilise un calcul différent (`getAdaptiveVelocityByVariant`, section suivante) car sa question est différente : "quel est le rythme de vente actuel, tout bien considéré ?".
+
+### Vitesse de vente adaptative (page Stock)
+
+**Problème découvert le 2026-07-17** : diviser par une fenêtre fixe (ex: 365j) sous-estime massivement un produit ajouté récemment - un produit vendu 20 fois en 14 jours réels montrerait 20/365 = 0,05 unité/jour au lieu de sa vraie vitesse ~1,4/jour, faussant `daysOfStock` et son statut (pourrait paraître "OK" alors qu'il part vite). À l'inverse, une simple moyenne plate sur un an réagit trop lentement si la demande d'un produit ancien change réellement (une accélération récente est noyée dans 11 mois d'historique plus calme).
+
+`getAdaptiveVelocityByVariant` (`src/lib/insights/velocity.ts`) répond aux deux à la fois, sans paramètre à régler à la main :
+
+```
+ageDays(variantId)         = jours depuis Variant.shopifyCreatedAt
+effectiveWindowDays        = min(365, max(1, ageDays))   -- jamais plus vieux que la variante, jamais plus d'un an
+decayRate                  = ln(2) / 30                  -- demi-vie de 30 jours
+weightedUnits(variantId)   = Σ quantity * exp(-decayRate * joursDepuisLaVente)   sur les commandes confirmées des `effectiveWindowDays` derniers jours
+weightSum                  = (1 - exp(-decayRate * effectiveWindowDays)) / decayRate   -- somme géométrique continue des poids, ramène weightedUnits à une vitesse
+velocityPerDay(variantId)  = weightedUnits(variantId) / weightSum
+```
+
+- **Produit récent** (< 1 an) : `effectiveWindowDays` = son âge réel, jamais la fenêtre max - un produit de 23 jours n'est JAMAIS jugé sur 365 jours dont 342 où il n'existait pas.
+- **Produit ancien avec beaucoup d'historique** : jusqu'à 1 an de données utilisé (`effectiveWindowDays = 365`), mais chaque vente pèse selon son ancienneté (demi-vie 30j : une vente d'il y a 30 jours compte moitié moins qu'une vente d'aujourd'hui) - vérifié sur données réelles (2026-07-17) : une variante de 995 jours avec une seule vente il y a ~360 jours et rien depuis affiche une vitesse quasi nulle (0,00001/j) plutôt que la moyenne plate trompeuse (1/365 = 0,003/j qui suggérerait une demande stable alors qu'elle s'est arrêtée) ; une autre variante du même âge dont les ventes sont concentrées récemment affiche une vitesse quasi double de sa moyenne plate (0,22 vs 0,12/j), reflétant une accélération réelle.
+- Au-delà d'un an, les données sont de toute façon jugées trop vieilles pour représenter la demande actuelle (assortiment/prix ont pu changer) - jamais chargées même si elles existent.
+
+`unitsInWindow` (unités brutes, non pondérées, sur `effectiveWindowDays`) sert séparément au calcul du taux d'écoulement (formule simple volontairement gardée non pondérée, voir section 9) - `velocityPerDay` (pondéré) sert lui à `daysOfStock`.
+
+`Variant.shopifyCreatedAt` (ajouté le 2026-07-18) vient du champ `createdAt` de l'API Shopify, absent pour les variantes synchronisées avant cette date tant que `npm run backfill:variant-created-at` n'a pas tourné (script ponctuel, un seul run nécessaire - la date de création ne change jamais). En son absence, `ageDays` est supposé égal au maximum (365j) plutôt que de sous-estimer une hypothétique variante récente sans données pour le prouver.
 
 ## 2. Jours de stock restant / date de rupture estimée
 
@@ -41,6 +64,8 @@ Peut être splitté par `Order.channel` pour comparer la vitesse B2B vs B2C sur 
 daysOfStock(variantId) = Variant.inventoryQuantity / velocity(variantId, 30)
 estimatedStockoutDate  = today + daysOfStock(variantId) jours
 ```
+
+(Page Stock : `velocity` ici est `getAdaptiveVelocityByVariant`, voir ci-dessus - pas une fenêtre fixe de 30j.)
 
 Cas limites à gérer explicitement dans le code (pas juste laisser diviser par zéro) :
 - `velocity = 0` → pas de vitesse de vente sur la fenêtre → `daysOfStock = null` ("pas de rupture prévisible" plutôt qu'Infinity).

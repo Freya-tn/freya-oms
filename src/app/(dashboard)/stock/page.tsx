@@ -36,6 +36,12 @@ export default async function StockPage({
       <Typography variant="h4" component="h1" gutterBottom>
         Stock
       </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Vitesse de vente calculée automatiquement : les ventes récentes comptent plus que les anciennes, sur un
+        historique remontant jusqu&apos;à 1 an pour les produits déjà bien établis. Pour un produit ajouté récemment,
+        seule sa vraie durée de vie est prise en compte (jamais diluée par une période où il n&apos;existait pas
+        encore) - survolez la colonne &quot;Ventes/jour&quot; pour voir la fenêtre exacte utilisée pour chaque ligne.
+      </Typography>
       <FilterBar
         vendors={vendors}
         showPeriodFilter={false}

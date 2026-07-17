@@ -39,6 +39,7 @@ const PRODUCT_VARIANT_FIELDS = /* GraphQL */ `
   price
   compareAtPrice
   inventoryQuantity
+  createdAt
   updatedAt
   inventoryItem {
     id
@@ -125,6 +126,7 @@ export type ShopifyVariantNode = {
   price: string;
   compareAtPrice: string | null;
   inventoryQuantity: number | null;
+  createdAt: string;
   updatedAt: string;
   inventoryItem: {
     id: string;
