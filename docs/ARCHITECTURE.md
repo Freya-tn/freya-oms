@@ -37,7 +37,7 @@ src/
     insights/
       velocity.ts, stockDays.ts, dormant.ts, channelComparison.ts, overview.ts,
       reorder.ts, abc.ts, vendorBreakdown.ts, orderTrend.ts, syncStatus.ts,
-      blackMarketComparison.ts
+      blackMarketComparison.ts, margin.ts, alerts.ts, productProfile.ts
     auth/
       auth.config.ts        — config NextAuth "edge-safe" (sans Credentials/Prisma), utilisée par proxy.ts
       auth.ts                — config complète (Credentials + Prisma), utilisée côté Node uniquement
@@ -56,14 +56,16 @@ src/
     login/page.tsx
     (dashboard)/
       layout.tsx
-      syncActions.ts         — Server Action "use server", déclenche syncProducts+syncOrders (bouton "Actualiser")
+      syncActions.ts         — Server Actions "use server" : sync complète (bouton "Actualiser") + sync produits seule (page Alertes)
+      alertes/page.tsx, alertes/actions.ts — page Alertes (coût manquant, anomalies de marge) + acknowledgeAlert/unacknowledgeAlert
       page.tsx              — Overview (KPIs + tendance CA + statut/déclenchement synchro)
       stock/page.tsx
       reorder/page.tsx       — suggestions de réapprovisionnement
-      produits/page.tsx      — classification ABC + répartition par marque
+      produits/page.tsx      — classification ABC (CA + marge) + répartition par marque
       b2b-b2c/page.tsx
-      black-market/page.tsx  — ventes déclarées vs black (Variant.isBlackMarket)
+      black-market/page.tsx  — ventes déclarées vs black (Variant.isBlackMarket) + tendance de la part du black
       dormants/page.tsx
+      produit/[variantId]/page.tsx — fiche produit unifiée (vue 360° par SKU)
 docs/
   DATABASE.md, SHOPIFY_SYNC.md, INSIGHTS.md, ARCHITECTURE.md
 docker-compose.yml         — Postgres local de dev (port 5433, le 5432 est déjà pris par un autre projet du monorepo)

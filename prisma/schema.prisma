@@ -208,3 +208,21 @@ model User {
   role         UserRole @default(ADMIN)
   createdAt    DateTime @default(now())
 }
+
+// Validation persistée d'une alerte de qualité de données/anomalie (page
+// Alertes) : une fois qu'un humain a confirmé qu'une valeur surprenante est
+// correcte (ex: une marge très supérieure à la moyenne, mais légitime), elle
+// ne doit plus jamais réapparaître comme "à vérifier" — contrairement à un
+// coût manquant qui se résout de lui-même une fois rempli côté Shopify (pas
+// besoin d'acquittement pour ce cas), certaines anomalies restent vraies
+// indéfiniment sans que ce soit un problème. Voir docs/INSIGHTS.md, section
+// "Alertes".
+model AlertAcknowledgment {
+  id             String   @id @default(cuid())
+  // Identifiant stable de l'alerte, ex: "missing-cost:<variantId>" ou
+  // "margin-anomaly-high:<variantId>" — reconstruit à l'identique à chaque
+  // calcul d'alerte pour pouvoir la retrouver ici.
+  alertKey       String   @unique
+  acknowledgedAt DateTime @default(now())
+  acknowledgedBy String?
+}

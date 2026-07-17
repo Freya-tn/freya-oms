@@ -9,10 +9,12 @@ import HourglassBottomIcon from "@mui/icons-material/HourglassBottomOutlined";
 import { getOverviewKpis } from "@/lib/insights/overview";
 import { getRevenueTrend } from "@/lib/insights/orderTrend";
 import { getLastSyncStatus } from "@/lib/insights/syncStatus";
+import { getRevenueByMonthYoY } from "@/lib/insights/seasonality";
 import { parsePeriodParam } from "@/lib/filterParams";
 import { formatCurrency } from "@/lib/format";
 import { KpiCard } from "@/components/KpiCard";
 import { RevenueTrendChart } from "@/components/RevenueTrendChart";
+import { YoYRevenueChart } from "@/components/YoYRevenueChart";
 import { FilterBar } from "@/components/FilterBar";
 import { SyncStatusBar } from "@/components/SyncStatusBar";
 
@@ -30,10 +32,11 @@ export default async function OverviewPage({
   const params = await searchParams;
   const windowDays = parsePeriodParam(params.window, DEFAULT_WINDOW_DAYS);
 
-  const [kpis, revenueTrend, syncStatuses] = await Promise.all([
+  const [kpis, revenueTrend, syncStatuses, yoyRevenue] = await Promise.all([
     getOverviewKpis(windowDays),
     getRevenueTrend(TREND_WINDOW_DAYS),
     getLastSyncStatus(),
+    getRevenueByMonthYoY(),
   ]);
   const revenue7d = kpis.totals7d.reduce((sum, t) => sum + t.revenue, 0);
 
@@ -117,7 +120,7 @@ export default async function OverviewPage({
         </Grid>
       </Grid>
 
-      <Card>
+      <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom>
             CA confirmé ({TREND_WINDOW_DAYS} derniers jours)
@@ -125,6 +128,21 @@ export default async function OverviewPage({
           <RevenueTrendChart data={revenueTrend} />
         </CardContent>
       </Card>
+
+      {yoyRevenue.years.length > 1 && (
+        <Card>
+          <CardContent>
+            <Typography variant="h6" gutterBottom>
+              Saisonnalité : CA par mois, comparé aux années précédentes
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Chaque ligne est une année ({yoyRevenue.years.join(", ")}) - permet de voir si un mois est
+              structurellement plus fort/faible plutôt que de le confondre avec une tendance récente.
+            </Typography>
+            <YoYRevenueChart data={yoyRevenue} />
+          </CardContent>
+        </Card>
+      )}
     </>
   );
 }

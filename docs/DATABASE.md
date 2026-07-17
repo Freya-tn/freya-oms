@@ -31,6 +31,8 @@ Schéma source : [`prisma/schema.prisma`](../prisma/schema.prisma). Ce document 
 
 Vitesse de vente, jours de stock restant, produits dormants/surstock : ce sont des requêtes sur `OrderLineItem` + `Order` + `InventorySnapshot`/`Variant`, pas des colonnes ou des tables. Voir [`INSIGHTS.md`](./INSIGHTS.md) pour les formules exactes et le filtre commun (`isConfirmed = true AND cancelledAt IS NULL`).
 
+**Exception volontaire : `AlertAcknowledgment`** (2026-07-17) est bien une table stockée, pas un insight calculé — elle ne stocke aucune donnée métier recalculable, seulement l'acte humain de validation d'une alerte ("j'ai vérifié, c'est correct"). Sans elle, une anomalie de marge légitime (ex: un produit vraiment très rentable) réapparaîtrait indéfiniment comme "à vérifier" à chaque recalcul de `getAlerts()`, alors que la donnée sous-jacente ne change pas. Clé `alertKey` (`"<catégorie>:<variantId>"`) reconstruite à l'identique à chaque calcul d'alerte pour la retrouver ici — voir `docs/INSIGHTS.md`, section "Alertes".
+
 ## Index
 
 - `Order(orderCreatedAt)`, `Order(channel, orderCreatedAt)`, `Order(isConfirmed, cancelledAt)` — supportent directement les requêtes d'insights (filtrage confirmé/non-annulé, groupement par canal, fenêtres temporelles).

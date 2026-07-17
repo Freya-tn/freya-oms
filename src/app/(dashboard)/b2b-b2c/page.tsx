@@ -1,6 +1,7 @@
 import { Card, CardContent, Grid, Typography } from "@mui/material";
 import { getChannelTotals, getTopProductsByChannel } from "@/lib/insights/channelComparison";
 import { getRevenueTrend } from "@/lib/insights/orderTrend";
+import { getMarginByChannel } from "@/lib/insights/margin";
 import { getVendorList } from "@/lib/insights/filters";
 import { parsePeriodParam, parseVendorParam } from "@/lib/filterParams";
 import { CHANNEL_COLOR } from "@/lib/theme/chartColors";
@@ -12,6 +13,7 @@ export const dynamic = "force-dynamic";
 
 const DEFAULT_WINDOW_DAYS = 30;
 const TREND_WINDOW_DAYS = 90;
+const percentFormatter = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 0 });
 
 export default async function B2bB2cPage({
   searchParams,
@@ -22,15 +24,26 @@ export default async function B2bB2cPage({
   const vendor = parseVendorParam(params.vendor);
   const windowDays = parsePeriodParam(params.window, DEFAULT_WINDOW_DAYS);
 
-  const [totals, topProducts, revenueTrend, vendors] = await Promise.all([
+  const [totals, topProducts, revenueTrend, marginByChannel, vendors] = await Promise.all([
     getChannelTotals(windowDays, { vendor }),
     getTopProductsByChannel(windowDays, 5, { vendor }),
     getRevenueTrend(TREND_WINDOW_DAYS),
+    getMarginByChannel(windowDays, { vendor }),
     getVendorList(),
   ]);
 
   const revenueItems = totals.map((t) => ({ id: t.channel, label: t.channel, value: t.revenue, color: CHANNEL_COLOR[t.channel] }));
   const unitsItems = totals.map((t) => ({ id: t.channel, label: t.channel, value: t.units, color: CHANNEL_COLOR[t.channel] }));
+  const marginItems = marginByChannel.map((m) => ({
+    id: m.channel,
+    label: m.channel,
+    sublabel:
+      m.marginRate !== null
+        ? `${percentFormatter.format(m.marginRate)} de marge · ${percentFormatter.format(m.costCoverage)} du CA couvert`
+        : "coût non renseigné",
+    value: m.margin,
+    color: CHANNEL_COLOR[m.channel],
+  }));
 
   return (
     <>
@@ -55,17 +68,23 @@ export default async function B2bB2cPage({
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Grid container spacing={4}>
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <Typography variant="subtitle1" sx={{ fontWeight: 600 }} gutterBottom>
                 CA ({windowDays} derniers jours)
               </Typography>
               <BarListChart items={revenueItems} valueType="currency" />
             </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <Typography variant="subtitle1" sx={{ fontWeight: 600 }} gutterBottom>
                 Unités vendues ({windowDays} derniers jours)
               </Typography>
               <BarListChart items={unitsItems} valueType="units" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 600 }} gutterBottom>
+                Marge ({windowDays} derniers jours)
+              </Typography>
+              <BarListChart items={marginItems} valueType="currency" />
             </Grid>
           </Grid>
         </CardContent>

@@ -1,7 +1,7 @@
 import { Card, CardContent, Grid, Typography } from "@mui/material";
 import PaidIcon from "@mui/icons-material/PaidOutlined";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOffOutlined";
-import { getSaleTypeTotals, getTopProductsBySaleType } from "@/lib/insights/blackMarketComparison";
+import { getSaleTypeTotals, getTopProductsBySaleType, getSaleTypeTrend } from "@/lib/insights/blackMarketComparison";
 import { getVendorList } from "@/lib/insights/filters";
 import { parsePeriodParam, parseVendorParam } from "@/lib/filterParams";
 import { SALE_TYPE_COLOR } from "@/lib/theme/chartColors";
@@ -9,10 +9,12 @@ import { formatCurrency } from "@/lib/format";
 import { FilterBar } from "@/components/FilterBar";
 import { KpiCard } from "@/components/KpiCard";
 import { BarListChart } from "@/components/BarListChart";
+import { SaleTypeTrendChart } from "@/components/SaleTypeTrendChart";
 
 export const dynamic = "force-dynamic";
 
 const DEFAULT_WINDOW_DAYS = 30;
+const TREND_WINDOW_DAYS = 90;
 const percentFormatter = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 1 });
 
 const SALE_TYPE_LABEL: Record<"DECLARED" | "BLACK", string> = {
@@ -29,9 +31,10 @@ export default async function BlackMarketPage({
   const vendor = parseVendorParam(params.vendor);
   const windowDays = parsePeriodParam(params.window, DEFAULT_WINDOW_DAYS);
 
-  const [totals, topProducts, vendors] = await Promise.all([
+  const [totals, topProducts, trend, vendors] = await Promise.all([
     getSaleTypeTotals(windowDays, { vendor }),
     getTopProductsBySaleType(windowDays, 5, { vendor }),
+    getSaleTypeTrend(TREND_WINDOW_DAYS, { vendor }),
     getVendorList(),
   ]);
 
@@ -90,6 +93,15 @@ export default async function BlackMarketPage({
           />
         </Grid>
       </Grid>
+
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>
+            Part du black dans le CA ({TREND_WINDOW_DAYS} derniers jours)
+          </Typography>
+          <SaleTypeTrendChart data={trend} />
+        </CardContent>
+      </Card>
 
       <Card sx={{ mb: 3 }}>
         <CardContent>

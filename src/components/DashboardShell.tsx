@@ -8,6 +8,7 @@ import { DashboardNavContent, DesktopDrawer, DRAWER_WIDTH } from "./DashboardNav
 
 const PAGE_TITLES: Record<string, string> = {
   "/": "Overview",
+  "/alertes": "Alertes",
   "/stock": "Stock",
   "/reorder": "Réapprovisionnement",
   "/produits": "Produits",
@@ -27,7 +28,7 @@ export function DashboardShell({
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
-  const title = PAGE_TITLES[pathname] ?? "Freya OMS";
+  const title = PAGE_TITLES[pathname] ?? (pathname.startsWith("/produit/") ? "Fiche produit" : "Freya OMS");
 
   return (
     <Box sx={{ display: "flex" }}>

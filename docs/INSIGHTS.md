@@ -117,6 +117,8 @@ Affichée en icône (↑/↓/→) sur la table Réapprovisionnement — permet d
 
 **Regroupement par fournisseur** (`groupReorderByVendor`) : agrège les suggestions par `vendor` (SKUs à commander, unités totales, ruptures) — vue "bon de commande" façon apps de gestion de stock Shopify (Assisty, Stocky), pour préparer une commande fournisseur sans avoir à re-trier la table manuellement.
 
+**Export CSV** (`ExportReorderCsvButton.tsx`, `src/lib/csv.ts`, 2026-07-17) : exporte exactement les lignes actuellement affichées (déjà filtrées par marque/couverture) - jamais un export "tout le catalogue" qui ignorerait le filtre actif. Séparateur `;` (pas `,`) : Excel en locale fr-FR utilise la virgule comme séparateur décimal. BOM UTF-8 ajouté pour qu'Excel affiche correctement les accents.
+
 **Prochaine évolution naturelle** : remplacer `LEAD_TIME_DAYS` global par un délai par marque/fournisseur (nécessite un modèle `Supplier` — volontairement pas encore construit, voir la question roadmap dans la conversation avec l'équipe du 2026-07-16).
 
 ## 6. Classification ABC (Pareto)
@@ -168,6 +170,51 @@ Proche de 1 = le produit tourne bien relativement à ce qui est en stock ; proch
 Différence structurelle avec B2B/B2C, qui a une conséquence directe sur le calcul : `channel` est une propriété de la commande, `isBlackMarket` est une propriété du **SKU/variante** — une même commande peut mélanger des lignes déclarées et black. `getSaleTypeTotals` ne peut donc **jamais** utiliser `Order.subtotalPrice` (même sans filtre marque, contrairement à `getChannelTotals`) : il retombe systématiquement sur une somme par ligne de commande, avec la même limite de précision documentée plus haut ("CA : `Order.subtotalPrice` vs somme des lignes de commande").
 
 Les deux dimensions (`channel` et `saleType`) sont indépendantes et ne doivent jamais être combinées sur un même graphique (une commande B2B peut très bien contenir une ligne black).
+
+**Tendance de la part du black** (`getSaleTypeTrend`, `SaleTypeTrendChart.tsx`, 2026-07-17) : un total figé sur la période ("18,9% de black ce mois-ci") ne dit pas si la situation s'améliore ou empire. Le graphique affiche `blackRatio` par jour (part du black dans le CA du jour, jamais le CA absolu empilé - un seul axe, un seul pourcentage). Un jour sans aucune vente a `blackRatio = null` (jamais 0, ce serait faux) - recharts laisse un vrai trou dans la ligne plutôt que de suggérer "0% de black ce jour-là". Sur une petite fenêtre quotidienne le ratio peut swinguer fort (peu de commandes/jour) - fenêtre fixe de 90j comme la tendance CA de B2B vs B2C, indépendante du sélecteur de période de la page.
+
+## 14. Marge (rentabilité)
+
+`src/lib/insights/margin.ts` — `getMarginByProduct`, `getMarginByVendor`, `getMarginByChannel`, `getAbcClassificationByMargin`. Répond à un manque documenté depuis longtemps (voir section 4) mais jamais codé jusqu'au 2026-07-17 : un produit peut être Top 1 en CA et catastrophique en marge, la classification ABC (section 6) étant purement CA ne le révèle pas.
+
+```
+margin = SUM(quantity * unitPrice - totalDiscount) - SUM(quantity * cost)   -- uniquement sur les lignes où Variant.cost est renseigné
+marginRate = margin / costedRevenue
+costCoverage = costedRevenue / revenue
+```
+
+**Règle non négociable : un coût manquant n'est jamais traité comme 0.** Toute agrégation (par produit/marque/canal) calcule `costedRevenue` et `cost` uniquement sur les lignes dont `Variant.cost IS NOT NULL` ; `revenue` (le CA affiché à côté) reste lui basé sur toutes les lignes. `costCoverage` (0 à 1) doit toujours être affiché à côté du taux de marge - un `marginRate` calculé sur 20% du CA n'a pas le même poids qu'un calculé sur 100%, et le cacher induirait en erreur. `marginRate` est `null` (jamais 0) si aucune ligne n'a de coût.
+
+Toujours calculée par ligne de commande (le coût vit sur `Variant`, jamais sur `Order`) - même limite de précision que documentée pour `isBlackMarket`/les CA filtrés par marque (remises multi-produits non allouées par Shopify au niveau ligne).
+
+`getAbcClassificationByMargin` : même Pareto que la classification ABC (section 6) mais cumulé sur la marge plutôt que le CA. Exclut entièrement les variantes sans coût (impossible de les classer par marge sans supposer un coût de 0) - `excludedVariantCount` retourné à côté pour l'afficher explicitement plutôt que de les faire disparaître silencieusement.
+
+## Fiche produit unifiée
+
+`src/lib/insights/productProfile.ts` (`getProductProfile`), page `/produit/[variantId]` — répond à "il faut ouvrir 4-5 pages pour tout savoir sur un SKU" (retour utilisateur 2026-07-17). Regroupe stock/vitesse/réappro/ABC (CA)/ABC (marge)/dormance/black pour UNE variante.
+
+**Choix volontaire : réutilise les insights catalogue-entier existants plutôt que d'écrire une seconde implémentation par variante.** `getProductProfile` appelle `getStockOverview()`, `getAbcClassification(90)`, `getAbcClassificationByMargin(90)`, `getDormantStock()`, `getReorderSuggestions({})` (sans filtre) puis fait un simple `.find(variantId)` sur chacun. Plus coûteux qu'une requête scopée à une seule variante, mais le catalogue est petit (~150 variantes) et le vrai risque à éviter est la dérive entre deux implémentations de la même formule (`daysOfStock`, tier ABC, etc.) - même principe que documenté pour `STOCK_STATUS_OPTIONS`.
+
+Accessible depuis `StockTable`/`ReorderTable`/`DormantTable` (titre produit cliquable, `Link` MUI + `next/link`).
+
+## Alertes
+
+`src/lib/insights/alerts.ts` (`getAlerts`), page `/alertes` — décision équipe 2026-07-17 : une page dédiée aux données manquantes/anomalies détectées automatiquement, jamais corrigées toutes seules, toujours validées ou rejetées par un humain.
+
+**Catégories actuelles** :
+- `missing-cost` : toute variante avec `Variant.cost IS NULL`. Auto-résolue dès que le coût est rempli sur Shopify (pas besoin d'acquittement, sauf si on veut volontairement faire taire une variante qui n'aura jamais de coût, ex: échantillon).
+- `margin-anomaly-negative` : marge négative sur 90 jours (vendu à perte) — signal absolu, toujours affiché, ne dépend pas d'une moyenne.
+- `margin-anomaly-high` : marge très supérieure à la moyenne du catalogue (`> moyenne + 2 écarts-types`), calculée sur l'échantillon des variantes costées avec vente sur la fenêtre. Souvent le signe d'une erreur de saisie de coût (ex: un chiffre oublié) plutôt qu'un vrai produit très rentable - à confirmer, pas à corriger automatiquement. Sauté si l'échantillon a moins de 5 variantes (`MIN_SAMPLE_FOR_ANOMALY`) : une moyenne/écart-type sur trop peu de points n'est pas fiable.
+
+**Acquittement persistant** (`AlertAcknowledgment`, `alertKey` unique du type `"<catégorie>:<variantId>"`) : une fois qu'un humain confirme qu'une valeur surprenante est correcte, elle ne doit plus jamais réapparaître comme "à vérifier" tant que la donnée ne change pas de forme - contrairement à `missing-cost` qui se résout de lui-même, une marge élevée légitime peut rester vraie indéfiniment sans que ce soit un problème. Server Actions `acknowledgeAlert`/`unacknowledgeAlert` (`src/app/(dashboard)/alertes/actions.ts`).
+
+**Prochaines catégories naturelles** (pas encore implémentées, mais la structure `Alert`/`getAlerts()` est faite pour en accueillir d'autres facilement) : tout autre champ Shopify qu'on découvre manquant/incohérent au fil de l'usage - voir `docs/SHOPIFY_SYNC.md`, "État des lieux : champs vérifiés vs supposés".
+
+## Saisonnalité (CA par mois, année sur année)
+
+`src/lib/insights/seasonality.ts` (`getRevenueByMonthYoY`), carte sur l'Overview sous la tendance CA — décision équipe 2026-07-17 : un delta "vs période précédente" (section 10) ne dit pas si un mois est structurellement fort/faible (saisonnalité) ou si c'est juste une tendance récente. Avec plusieurs années d'historique désormais disponibles, une vraie comparaison calendaire (même mois, années différentes) est possible.
+
+Une ligne par année, coloriée via la rampe séquentielle bleue (année la plus ancienne = la plus claire, la plus récente = la plus foncée) plutôt que des teintes catégorielles - ce n'est pas une comparaison d'identités fixes (comme B2B/B2C) mais une progression dans le temps, même logique que la rampe ABC. `Order.subtotalPrice` (pas de somme par ligne) : total non filtré par marque, même règle que documentée pour le CA global. Un mois sans aucune donnée pour une année (ex: janvier-novembre 2022, historique commençant fin décembre 2022) n'a simplement pas de clé pour cette année dans le point de données - recharts ne trace rien plutôt que de suggérer un CA à 0. N'est affichée que si au moins 2 années sont présentes dans l'historique (sinon la comparaison n'a pas de sens).
 
 ## Filtres marque et période
 

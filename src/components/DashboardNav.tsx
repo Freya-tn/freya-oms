@@ -19,9 +19,11 @@ import HourglassBottomIcon from "@mui/icons-material/HourglassBottomOutlined";
 import ShoppingCartIcon from "@mui/icons-material/ShoppingCartOutlined";
 import CategoryIcon from "@mui/icons-material/CategoryOutlined";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOffOutlined";
+import NotificationsActiveIcon from "@mui/icons-material/NotificationsActiveOutlined";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview", icon: DashboardIcon },
+  { href: "/alertes", label: "Alertes", icon: NotificationsActiveIcon },
   { href: "/stock", label: "Stock", icon: Inventory2Icon },
   { href: "/reorder", label: "Réapprovisionnement", icon: ShoppingCartIcon },
   { href: "/produits", label: "Produits", icon: CategoryIcon },

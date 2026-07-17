@@ -1,4 +1,4 @@
-import { Alert, Card, CardContent, Divider, Grid, Typography } from "@mui/material";
+import { Alert, Box, Card, CardContent, Divider, Grid, Typography } from "@mui/material";
 import {
   getReorderSuggestions,
   groupReorderByVendor,
@@ -13,6 +13,7 @@ import { FilterBar } from "@/components/FilterBar";
 import { SupplierOrderSummaryTable } from "@/components/SupplierOrderSummary";
 import { TopUrgencyChart } from "@/components/TopUrgencyChart";
 import { CoverageControl } from "@/components/CoverageControl";
+import { ExportReorderCsvButton } from "@/components/ExportReorderCsvButton";
 
 export const dynamic = "force-dynamic";
 
@@ -61,9 +62,12 @@ export default async function ReorderPage({
             <Grid size={{ xs: 12, md: 5 }}>
               <Card sx={{ height: "100%" }}>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Commandes à passer par fournisseur
-                  </Typography>
+                  <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 1 }}>
+                    <Typography variant="h6" gutterBottom sx={{ mb: 0 }}>
+                      Commandes à passer par fournisseur
+                    </Typography>
+                    <ExportReorderCsvButton rows={rows} />
+                  </Box>
                   <SupplierOrderSummaryTable rows={supplierSummary} />
                 </CardContent>
               </Card>

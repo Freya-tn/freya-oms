@@ -1,7 +1,8 @@
 "use client";
 
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
-import { Chip, Tooltip } from "@mui/material";
+import { Chip, Link as MuiLink, Tooltip } from "@mui/material";
+import NextLink from "next/link";
 import ReportProblemIcon from "@mui/icons-material/ReportProblemOutlined";
 import WarningAmberIcon from "@mui/icons-material/WarningAmberOutlined";
 import ScheduleIcon from "@mui/icons-material/ScheduleOutlined";
@@ -60,7 +61,17 @@ const columns: GridColDef<ReorderRow>[] = [
   },
   { field: "sku", headerName: "SKU", width: 130 },
   { field: "vendor", headerName: "Marque", width: 130 },
-  { field: "productTitle", headerName: "Produit", flex: 1, minWidth: 200 },
+  {
+    field: "productTitle",
+    headerName: "Produit",
+    flex: 1,
+    minWidth: 200,
+    renderCell: (params) => (
+      <MuiLink component={NextLink} href={`/produit/${params.row.variantId}`} underline="hover">
+        {params.value}
+      </MuiLink>
+    ),
+  },
   { field: "title", headerName: "Variante", flex: 1, minWidth: 140 },
   { field: "inventoryQuantity", headerName: "Stock", width: 90, type: "number" },
   {

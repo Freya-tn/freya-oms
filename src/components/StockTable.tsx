@@ -1,7 +1,8 @@
 "use client";
 
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
-import { Chip } from "@mui/material";
+import { Chip, Link as MuiLink } from "@mui/material";
+import NextLink from "next/link";
 import type { StockRow } from "@/lib/insights/stockDays";
 
 const percentFormatter = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 0 });
@@ -9,7 +10,17 @@ const percentFormatter = new Intl.NumberFormat("fr-FR", { style: "percent", maxi
 const columns: GridColDef<StockRow>[] = [
   { field: "sku", headerName: "SKU", width: 140 },
   { field: "vendor", headerName: "Marque", width: 130 },
-  { field: "productTitle", headerName: "Produit", flex: 1, minWidth: 200 },
+  {
+    field: "productTitle",
+    headerName: "Produit",
+    flex: 1,
+    minWidth: 200,
+    renderCell: (params) => (
+      <MuiLink component={NextLink} href={`/produit/${params.row.variantId}`} underline="hover">
+        {params.value}
+      </MuiLink>
+    ),
+  },
   { field: "title", headerName: "Variante", flex: 1, minWidth: 160 },
   { field: "inventoryQuantity", headerName: "Stock", width: 100, type: "number" },
   {
