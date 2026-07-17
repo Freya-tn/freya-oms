@@ -4,11 +4,13 @@ import { runBulkQuery } from "@/lib/shopify/bulkOperations";
 import {
   buildProductsBulkQuery,
   PRODUCTS_PAGE_QUERY,
+  INVENTORY_ITEMS_PAGE_QUERY,
   withExclusionFilter,
   isExcludedProduct,
   type BulkProductsLine,
   type ShopifyProductNode,
   type ShopifyVariantNode,
+  type ShopifyInventoryItemNode,
 } from "@/lib/shopify/queries/products";
 import { startSyncRun, finishSyncRun, failSyncRun, getLastSuccessfulSync } from "./syncRun";
 import { deriveIsBlackMarket } from "@/lib/shopify/deriveVariantFields";
@@ -55,6 +57,51 @@ async function fetchViaPagination(filter?: string): Promise<ProductWithVariants[
   }
 
   return results;
+}
+
+/**
+ * Rattrape les changements de coût (`InventoryItem.unitCost`) qu'un simple
+ * poll produits ne peut jamais voir — voir le commentaire sur
+ * `INVENTORY_ITEMS_PAGE_QUERY` dans queries/products.ts et
+ * docs/SHOPIFY_SYNC.md. Uniquement pour les polls incrémentaux : le premier
+ * sync (Bulk Operations) lit déjà `unitCost` frais pour toutes les variantes.
+ */
+async function fetchInventoryItemCostUpdates(filter: string): Promise<ShopifyInventoryItemNode[]> {
+  const results: ShopifyInventoryItemNode[] = [];
+  let after: string | null = null;
+
+  while (true) {
+    const data: {
+      inventoryItems: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        edges: Array<{ node: ShopifyInventoryItemNode }>;
+      };
+    } = await shopifyGraphQL(INVENTORY_ITEMS_PAGE_QUERY, { first: 250, after, query: filter });
+
+    for (const edge of data.inventoryItems.edges) {
+      results.push(edge.node);
+    }
+
+    if (!data.inventoryItems.pageInfo.hasNextPage) break;
+    after = data.inventoryItems.pageInfo.endCursor;
+  }
+
+  return results;
+}
+
+async function applyInventoryItemCostUpdates(items: ShopifyInventoryItemNode[]): Promise<number> {
+  let updated = 0;
+  for (const item of items) {
+    // Un inventory item sans variant rattachée (rare — ex: composant de
+    // bundle) n'a rien à mettre à jour chez nous.
+    if (!item.variant) continue;
+    const result = await prisma.variant.updateMany({
+      where: { inventoryItemId: gidToBigInt(item.id) },
+      data: { cost: item.unitCost?.amount ?? null, syncedAt: new Date() },
+    });
+    updated += result.count;
+  }
+  return updated;
 }
 
 async function upsertProduct({ product, variants }: ProductWithVariants) {
@@ -150,9 +197,18 @@ export async function syncProducts() {
       upserted += 1;
     }
 
+    // Rattrapage coût (voir fetchInventoryItemCostUpdates) : uniquement sur
+    // un poll incrémental, le premier sync (Bulk Operations) a déjà lu un
+    // unitCost frais pour toutes les variantes.
+    let costsUpdated = 0;
+    if (updatedSince) {
+      const costUpdates = await fetchInventoryItemCostUpdates(updatedSince);
+      costsUpdated = await applyInventoryItemCostUpdates(costUpdates);
+    }
+
     await finishSyncRun(run.id, {
       cursor: startedAt.toISOString(),
-      recordsProcessed: upserted + removed,
+      recordsProcessed: upserted + removed + costsUpdated,
     });
   } catch (error) {
     await failSyncRun(run.id, error);

@@ -98,6 +98,31 @@ Conséquence pour les insights (voir `docs/INSIGHTS.md`) : toute requête qui ve
 
 **Si la règle elle-même doit être rejouée sur des variantes déjà en base** (ex: le préfixe `"B_"` change pour autre chose) : modifier `deriveVariantFields.ts` puis lancer `npm run recompute:variants` — recalcule `isBlackMarket` sur toute la table `Variant` à partir du `sku` déjà stocké, **sans ré-appeler Shopify**.
 
+## Piège : le coût n'est PAS couvert par le poll produits
+
+**Découvert et corrigé le 2026-07-17, sur un changement réel** : un changement de `InventoryItem.unitCost` (coût d'achat, `Variant.cost` chez nous) sur Shopify **ne met à jour ni `Product.updatedAt` ni `ProductVariant.updatedAt`**. Vérifié avec un vrai changement (84 → 83 TND sur une variante réelle) : les deux timestamps sont restés figés à leur dernière valeur (plus d'un mois avant) alors que le coût venait de changer. Conséquence : le poll incrémental produits (`updated_at:>...` sur `products`) ne peut **jamais** détecter un changement de coût seul — la variante ne matche simplement plus le filtre, et `Variant.cost` reste périmé indéfiniment en base, sans erreur ni signal.
+
+Seul `InventoryItem.updatedAt` (un champ séparé, sur une ressource Shopify différente) bouge réellement quand le coût change (vérifié : passé de mi-2025 à l'instant du changement). Fix : un second poll incrémental dédié, sur `inventoryItems(query: "updated_at:>...")` (voir `INVENTORY_ITEMS_PAGE_QUERY` dans `src/lib/shopify/queries/products.ts`, `fetchInventoryItemCostUpdates`/`applyInventoryItemCostUpdates` dans `syncProducts.ts`) — appelé uniquement sur un poll incrémental (le tout premier sync, via Bulk Operations, lit déjà un coût frais pour toutes les variantes) et avec le **même curseur** que le poll produits (`SyncRun` resource `PRODUCTS`), pour rester cohérent sans ajouter de ressource `SyncRun` séparée.
+
+**Pourquoi c'est important** : `Variant.cost` alimente directement `stockValue` (Overview : "Valeur du stock", Dormants : "Argent immobilisé") — un coût périmé fausse silencieusement ces chiffres, sans qu'aucune erreur ne le signale. Si un jour d'autres champs Shopify se révèlent avoir le même comportement (changement qui ne bump pas `updatedAt` du produit/variante), vérifier avec un vrai changement en prod avant de supposer que le poll standard suffit — ne pas se fier à la doc Shopify seule, qui ne documente explicitement que le cas des ajustements de quantité de stock (`inventory adjustment`), pas des autres champs d'`InventoryItem`.
+
+### État des lieux : champs vérifiés vs supposés (2026-07-17)
+
+Principe posé après la découverte du coût (voir `CLAUDE.md`, règle 13) : **ne jamais supposer qu'un champ Shopify qu'on exploite est bien rattrapé par le poll qui est censé le couvrir** — soit c'est vérifié avec un vrai changement en prod, soit c'est marqué comme une hypothèse à tester le jour où on en aura besoin/le temps.
+
+**Vérifiés empiriquement (avec un vrai changement en prod)** :
+- `Order.channel`/`isConfirmed`/`cancelledAt`/`financialStatus`/`fulfillmentStatus` : le mécanisme de poll incrémental commandes est en production depuis le début du projet et a déjà capturé de vrais changements de statut/annulation au fil des polls réguliers.
+- `InventoryItem.unitCost` (`Variant.cost`) : **cassé puis corrigé** le 2026-07-17 (voir ci-dessus) — c'est cette vérification qui a révélé le trou.
+
+**Documentés explicitement par Shopify (pas testés par nous, mais la doc est explicite)** :
+- `Variant.inventoryQuantity` : la doc Shopify du champ `Product.updatedAt` mentionne explicitement qu'un ajustement de quantité de stock ("inventory adjustment") compte comme une mise à jour du produit — donc couvert par le poll produits standard.
+
+**Hypothèses non vérifiées à ce jour** (champs natifs de leur ressource, donc a priori couverts par construction, mais jamais stress-testés comme le coût) :
+- `Product.title`/`vendor`/`productType`/`status` et `ProductVariant.price`/`compareAtPrice`/`sku`/`barcode`/`title` : champs natifs de `Product`/`ProductVariant` eux-mêmes (pas d'une ressource liée séparée comme `InventoryItem`), donc a priori couverts par `updatedAt` du poll produits — mais "a priori" seulement, pas vérifié avec un vrai changement comme le coût.
+- `Order.tags`/`totalPrice`/`subtotalPrice`/infos client : champs natifs d'`Order`, a priori couverts par le poll incrémental commandes — jamais stress-testé isolément (contrairement au statut de confirmation, capturé indirectement via l'usage réel en production).
+
+Si un doute survient sur un de ces champs (des chiffres qui semblent périmés sans raison apparente), reproduire la méthode utilisée pour le coût : changer la vraie valeur sur Shopify, comparer `updatedAt` avant/après sur la ressource concernée ET sur ses ressources parentes, avant de conclure.
+
 ## Version d'API
 
 `SHOPIFY_API_VERSION` dans `.env` — voir la note dans `AGENTS.md`/`node_modules/next/dist/docs` : toujours vérifier la version d'API Admin GraphQL supportée au moment de l'implémentation plutôt que de se fier à une valeur mémorisée, Shopify publie une nouvelle version trimestrielle et déprécie les anciennes.

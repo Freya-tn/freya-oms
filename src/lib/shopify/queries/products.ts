@@ -132,6 +132,47 @@ export type ShopifyVariantNode = {
   };
 };
 
+/**
+ * Poll incrémental dédié au coût (`InventoryItem.unitCost`) — voir
+ * docs/SHOPIFY_SYNC.md, "Piège : le coût n'est PAS couvert par le poll
+ * produits". Un changement de coût ne met à jour NI `Product.updatedAt` NI
+ * `ProductVariant.updatedAt` côté Shopify (vérifié le 2026-07-17 sur un
+ * changement réel : les deux sont restés figés à leur dernière valeur alors
+ * que le coût avait changé il y a quelques secondes) — seul
+ * `InventoryItem.updatedAt` bouge. Le poll produits standard ne peut donc
+ * jamais détecter un changement de coût seul ; ce poll séparé, filtré sur ce
+ * même champ, comble le trou.
+ */
+export const INVENTORY_ITEMS_PAGE_QUERY = /* GraphQL */ `
+  query InventoryItemsPage($first: Int!, $after: String, $query: String) {
+    inventoryItems(first: $first, after: $after, query: $query) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      edges {
+        node {
+          id
+          updatedAt
+          unitCost {
+            amount
+          }
+          variant {
+            id
+          }
+        }
+      }
+    }
+  }
+`;
+
+export type ShopifyInventoryItemNode = {
+  id: string;
+  updatedAt: string;
+  unitCost: { amount: string } | null;
+  variant: { id: string } | null;
+};
+
 /** Ligne brute du JSONL Bulk Operation : soit un produit, soit une variante avec `__parentId`. */
 export type BulkProductsLine =
   | (ShopifyProductNode & { __parentId?: undefined })
