@@ -39,8 +39,8 @@ export default async function B2bB2cPage({
     label: m.channel,
     sublabel:
       m.marginRate !== null
-        ? `${percentFormatter.format(m.marginRate)} de marge · ${percentFormatter.format(m.costCoverage)} du CA couvert`
-        : "coût non renseigné",
+        ? `${percentFormatter.format(m.marginRate)} de marge (calculée sur ${percentFormatter.format(m.costCoverage)} du CA, le reste n'a pas de coût connu)`
+        : "coût non renseigné sur Shopify : marge impossible à calculer",
     value: m.margin,
     color: CHANNEL_COLOR[m.channel],
   }));

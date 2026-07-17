@@ -107,11 +107,14 @@ export default async function ProduitsPage({
       </Grid>
 
       <Typography variant="h6" gutterBottom>
-        Marge
+        Marge (ce qui reste après avoir payé le produit)
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        CA net de coût de revient, calculé uniquement sur les lignes dont le coût est renseigné côté Shopify (jamais un
-        coût manquant traité comme 0). Le sous-titre indique la part du CA réellement couverte par un coût connu.
+        Marge = chiffre d&apos;affaires moins le coût d&apos;achat du produit (le prix payé au fournisseur). Un produit
+        peut faire beaucoup de CA (voir &quot;Top produits&quot; ci-dessus) tout en étant peu rentable, et inversement.
+        Ce calcul n&apos;est possible que sur les ventes dont le coût est renseigné sur Shopify : quand ce n&apos;est
+        pas le cas pour une partie des ventes, le taux de marge affiché précise entre parenthèses sur quelle part du CA
+        il est réellement basé, pour ne jamais laisser croire à une rentabilité connue à 100%.
       </Typography>
       <Grid container spacing={3} sx={{ mb: 3 }}>
         <Grid size={{ xs: 12, md: 6 }}>
@@ -126,8 +129,8 @@ export default async function ProduitsPage({
                   label: row.label,
                   sublabel:
                     row.marginRate !== null
-                      ? `${percentFormatter.format(row.marginRate)} de marge · ${percentFormatter.format(row.costCoverage)} du CA couvert`
-                      : "coût non renseigné",
+                      ? `${percentFormatter.format(row.marginRate)} de marge (calculée sur ${percentFormatter.format(row.costCoverage)} du CA, le reste n'a pas de coût connu)`
+                      : "coût non renseigné sur Shopify : marge impossible à calculer",
                   value: row.margin,
                 }))}
                 limit={TOP_N}
@@ -148,8 +151,8 @@ export default async function ProduitsPage({
                   label: row.label,
                   sublabel:
                     row.marginRate !== null
-                      ? `${percentFormatter.format(row.marginRate)} de marge · ${percentFormatter.format(row.costCoverage)} du CA couvert`
-                      : "coût non renseigné",
+                      ? `${percentFormatter.format(row.marginRate)} de marge (calculée sur ${percentFormatter.format(row.costCoverage)} du CA, le reste n'a pas de coût connu)`
+                      : "coût non renseigné sur Shopify : marge impossible à calculer",
                   value: row.margin,
                 }))}
                 limit={TOP_N}
@@ -161,22 +164,27 @@ export default async function ProduitsPage({
       </Grid>
 
       <Typography variant="h6" gutterBottom>
-        Classification ABC complète (par variante)
+        Classement des produits par importance dans le CA (par variante)
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Détail par SKU (tailles séparées), nécessaire pour les décisions de réapprovisionnement (voir la page
-        Réapprovisionnement). Classement par CA : un top-vendeur n&apos;est pas forcément le plus rentable, voir le
-        classement par marge ci-dessous.
+        Chaque variante (taille/format compris) est classée en 3 groupes selon sa contribution au chiffre
+        d&apos;affaires total : <strong>A</strong> regroupe les produits qui, ensemble, font déjà 80% du CA - à ne
+        jamais laisser en rupture ; <strong>B</strong> les 15% suivants ; <strong>C</strong> le reste, une
+        contribution marginale. Utile pour les décisions de réapprovisionnement (voir la page Réapprovisionnement).
+        Attention : un produit qui vend beaucoup (tier A) n&apos;est pas forcément celui qui rapporte le plus une fois
+        son coût déduit - voir le classement par marge ci-dessous.
       </Typography>
       <AbcTable rows={abcRows} />
 
       <Typography variant="h6" gutterBottom sx={{ mt: 4 }}>
-        Classification ABC par marge (par variante)
+        Le même classement, mais par rentabilité réelle (marge) plutôt que par CA
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Même logique de Pareto, mais classée par marge plutôt que par CA.
+        Mêmes groupes A/B/C qu&apos;au-dessus (A = les produits qui font ensemble 80% de la marge totale, B = les 15%
+        suivants, C = le reste), mais triés par ce qui reste après avoir payé le coût du produit, pas par ce qui a été
+        vendu. Un produit qui se vend beaucoup peut très bien ne pas être ici en tier A si sa marge réelle est faible.
         {marginAbc.excludedVariantCount > 0 &&
-          ` ${formatNumber(marginAbc.excludedVariantCount)} variante(s) sans coût renseigné exclue(s) de ce classement (impossible de les classer par marge sans supposer un coût de 0).`}
+          ` ${formatNumber(marginAbc.excludedVariantCount)} variante(s) sans coût renseigné sur Shopify sont exclues de ce classement (impossible de calculer une marge sans connaître le coût réel).`}
       </Typography>
       <MarginAbcTable rows={marginAbc.rows} />
     </>
