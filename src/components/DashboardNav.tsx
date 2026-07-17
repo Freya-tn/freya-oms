@@ -21,6 +21,12 @@ import CategoryIcon from "@mui/icons-material/CategoryOutlined";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOffOutlined";
 import NotificationsActiveIcon from "@mui/icons-material/NotificationsActiveOutlined";
 import TrendingUpIcon from "@mui/icons-material/TrendingUpOutlined";
+import ArrowBackIcon from "@mui/icons-material/ArrowBackOutlined";
+
+// Portail Freya (racine du hostname Tailscale partagé, voir
+// docs/ARCHITECTURE.md, "Topologie SSO Freya") — lien absolu, freyaOMS tourne
+// sur son propre port (8444), pas un sous-chemin.
+const PORTAL_URL = "https://ip-172-26-14-45.tail515d61.ts.net/";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview", icon: DashboardIcon },
@@ -49,6 +55,21 @@ export function DashboardNavContent({ onNavigate }: { onNavigate?: () => void })
           Stock &amp; insights Shopify
         </Typography>
       </Toolbar>
+      <Box sx={{ px: 1.5, pb: 1 }}>
+        <ListItemButton
+          component={Link}
+          href={PORTAL_URL}
+          sx={{ borderRadius: 2, color: "text.secondary" }}
+        >
+          <ListItemIcon sx={{ color: "inherit", minWidth: 36 }}>
+            <ArrowBackIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            slotProps={{ primary: { sx: { fontSize: 14, fontWeight: 500 } } }}
+            primary="Portail Freya"
+          />
+        </ListItemButton>
+      </Box>
       <Box sx={{ overflow: "auto", px: 1.5 }}>
         <List sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
           {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
