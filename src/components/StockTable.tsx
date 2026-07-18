@@ -2,6 +2,7 @@
 
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { Chip, Link as MuiLink } from "@mui/material";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import NextLink from "next/link";
 import type { StockRow } from "@/lib/insights/stockDays";
 
@@ -15,8 +16,15 @@ function buildColumns(windowDays: number): GridColDef<StockRow>[] {
     flex: 1,
     minWidth: 200,
     renderCell: (params) => (
-      <MuiLink component={NextLink} href={`/produit/${params.row.variantId}`} underline="hover">
+      <MuiLink
+        component={NextLink}
+        href={`/produit/${params.row.variantId}`}
+        underline="hover"
+        title="Voir la fiche détaillée du produit"
+        sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}
+      >
         {params.value}
+        <ChevronRightIcon fontSize="inherit" sx={{ opacity: 0.55 }} />
       </MuiLink>
     ),
   },

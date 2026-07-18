@@ -49,7 +49,8 @@ export default async function StockPage({
         a réellement eu du stock (pas {windowDays} jours calendaires bruts) - une rupture récente ne fait jamais
         croire à tort qu&apos;un produit se vend moins bien. Même logique et même réglage que la page
         Réapprovisionnement. Une variante trop récente ou sans assez de recul affiche &quot;-&quot; plutôt qu&apos;un
-        chiffre peu fiable.
+        chiffre peu fiable. Cliquez sur le nom d&apos;un produit pour ouvrir sa fiche détaillée (historique
+        ventes/stock, réappro, marge...).
       </Typography>
       <Card sx={{ mb: 3 }}>
         <CardContent>
