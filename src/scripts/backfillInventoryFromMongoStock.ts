@@ -38,6 +38,17 @@ import { prisma } from "../lib/db";
  * - `recordedAt` fixé à minuit UTC (jamais une heure de poll réaliste comme
  *   les vraies lignes) — marqueur volontaire pour rester distinguable d'un
  *   vrai poll a posteriori, sans avoir besoin d'une colonne dédiée.
+ * - **Produits "toujours en stock" (jamais mentionnés en rupture) : confirmés
+ *   au cas par cas avec l'équipe, jamais supposés automatiquement** (2026-07-18).
+ *   Un produit à variante unique absent de TOUTES les listes de rupture du
+ *   tracker peut vouloir dire deux choses très différentes : soit il est
+ *   réellement resté en stock en continu, soit le tracker a un angle mort
+ *   dessus (renommage, produit hors du périmètre suivi) — dans ce second cas,
+ *   le backfiller comme "toujours en stock" inventerait une disponibilité
+ *   fausse. `ALWAYS_IN_STOCK_CONFIRMED_TITLES` liste donc explicitement les
+ *   titres confirmés par l'équipe (jamais une inférence automatique) ; tout
+ *   autre produit "jamais mentionné" reste non backfillé tant qu'il n'a pas
+ *   été confirmé de la même façon.
  *
  * Nécessite `MONGO_STOCK_URL` en variable d'environnement au moment de
  * l'exécution (jamais commité, ce n'est qu'un identifiant pour ce run
@@ -45,6 +56,22 @@ import { prisma } from "../lib/db";
  * Sans `--execute`, le script tourne en dry-run (affiche ce qu'il ferait,
  * n'écrit rien).
  */
+
+// Confirmés le 2026-07-18 par l'équipe : jamais en rupture depuis leur
+// création, alors qu'absents de toutes les listes du tracker Mongo — voir le
+// commentaire ci-dessus sur pourquoi ce n'est JAMAIS une inférence automatique.
+const ALWAYS_IN_STOCK_CONFIRMED_TITLES = [
+  "AHA 7 Whitehead Power Liquid",
+  "Soothing and Barrier Support Serum",
+  "Calming Serum: Green Tea + Panthenol",
+  "Clear Fit Master Patch",
+  "Radiance Cleansing Balm",
+  "Anua Heartleaf 77% Soothing Toner",
+  "Anua Heartleaf Pore Control Cleansing Oil",
+  "SKIN1004 Madagascar Centella Poremizing Quick Clay Stick Mask",
+  "SKIN1004 Madagascar Centella Quick Calming Duo",
+  "SKIN1004 Madagascar Centella Toning Toner",
+].map((t) => t.trim().toLowerCase());
 
 type MongoStockDoc = { date: Date; products: Array<{ title: string }> };
 
@@ -65,15 +92,18 @@ async function main() {
 
   if (docs.length === 0) throw new Error("Aucun document trouvé dans stockDB.Freya-Stock.");
 
-  const earliestRealSnapshot = await prisma.inventorySnapshot.aggregate({ _min: { recordedAt: true } });
-  const cutoff = earliestRealSnapshot._min.recordedAt
-    ? new Date(
-        Date.UTC(
-          earliestRealSnapshot._min.recordedAt.getUTCFullYear(),
-          earliestRealSnapshot._min.recordedAt.getUTCMonth(),
-          earliestRealSnapshot._min.recordedAt.getUTCDate(),
-        ),
-      )
+  // Exclut nos propres lignes backfillées (marquées à minuit UTC pile, voir
+  // le commentaire en tête de fichier) — sinon un re-run après un premier
+  // backfill confondrait ce backfill avec du vrai historique de poll et
+  // déplacerait la coupure à tort (bug réel rencontré le 2026-07-18 en
+  // testant l'extension "toujours en stock").
+  const earliestRealSnapshot = await prisma.$queryRaw<Array<{ min: Date | null }>>`
+    SELECT MIN("recordedAt") AS min FROM "InventorySnapshot"
+    WHERE "recordedAt" != date_trunc('day', "recordedAt");
+  `;
+  const realMin = earliestRealSnapshot[0]?.min;
+  const cutoff = realMin
+    ? new Date(Date.UTC(realMin.getUTCFullYear(), realMin.getUTCMonth(), realMin.getUTCDate()))
     : new Date(); // pas de poll réel du tout -> tout l'historique Mongo est backfillable
 
   const relevantDocs = docs.filter((d) => new Date(d.date) < cutoff);
@@ -128,6 +158,35 @@ async function main() {
     }
   }
   console.log(`${skippedBeforeCreation} jours sautés (antérieurs à la création Shopify de la variante concernée).`);
+
+  // Produits confirmés "toujours en stock" (jamais mentionnés en rupture,
+  // voir ALWAYS_IN_STOCK_CONFIRMED_TITLES) : un jour "en stock" (quantity=1)
+  // par jour calendaire, de max(shopifyCreatedAt, début du tracking Mongo) au
+  // cutoff (jamais après confirmation explicite, voir commentaire en tête de
+  // fichier).
+  const mongoTrackingStart = new Date(
+    Date.UTC(new Date(docs[0].date).getUTCFullYear(), new Date(docs[0].date).getUTCMonth(), new Date(docs[0].date).getUTCDate()),
+  );
+  let alwaysInStockRows = 0;
+  let alwaysInStockMatched = 0;
+  for (const p of products) {
+    if (p.variants.length !== 1) continue;
+    const [variant] = p.variants;
+    if (!variant.shopifyCreatedAt) continue;
+    if (!ALWAYS_IN_STOCK_CONFIRMED_TITLES.includes(p.title.trim().toLowerCase())) continue;
+
+    alwaysInStockMatched++;
+    for (let day = mongoTrackingStart; day < cutoff; day = new Date(day.getTime() + 86_400_000)) {
+      // Même règle que la boucle principale ci-dessus (jamais avant l'heure
+      // exacte de création, pas juste le jour calendaire tronqué à minuit).
+      if (day < variant.shopifyCreatedAt) continue;
+      rows.push({ variantId: variant.id, quantity: 1, recordedAt: day });
+      alwaysInStockRows++;
+    }
+  }
+  console.log(
+    `${alwaysInStockMatched}/${ALWAYS_IN_STOCK_CONFIRMED_TITLES.length} titres "toujours en stock" confirmés trouvés dans le catalogue -> ${alwaysInStockRows} lignes "en stock" ajoutées.`,
+  );
 
   const positiveCount = rows.filter((r) => r.quantity > 0).length;
   console.log(
