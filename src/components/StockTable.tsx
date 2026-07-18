@@ -5,8 +5,6 @@ import { Chip, Link as MuiLink, Tooltip } from "@mui/material";
 import NextLink from "next/link";
 import type { StockRow } from "@/lib/insights/stockDays";
 
-const percentFormatter = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 0 });
-
 const columns: GridColDef<StockRow>[] = [
   { field: "sku", headerName: "SKU", width: 140 },
   { field: "vendor", headerName: "Marque", width: 130 },
@@ -46,13 +44,6 @@ const columns: GridColDef<StockRow>[] = [
         </Tooltip>
       );
     },
-  },
-  {
-    field: "sellThroughRate",
-    headerName: "Taux d'écoulement",
-    width: 160,
-    type: "number",
-    valueFormatter: (value: number | null) => (value === null ? "-" : percentFormatter.format(value)),
   },
   {
     field: "daysOfStock",

@@ -69,8 +69,6 @@ velocityPerDay(variantId)  = weightedUnits(variantId) / weightSum
 - **Produit ancien avec beaucoup d'historique** : jusqu'à 1 an de données utilisé (`effectiveWindowDays = 365`), mais chaque vente pèse selon son ancienneté (demi-vie 30j : une vente d'il y a 30 jours compte moitié moins qu'une vente d'aujourd'hui) - vérifié sur données réelles (2026-07-17) : une variante de 995 jours avec une seule vente il y a ~360 jours et rien depuis affiche une vitesse quasi nulle (0,00001/j) plutôt que la moyenne plate trompeuse (1/365 = 0,003/j qui suggérerait une demande stable alors qu'elle s'est arrêtée) ; une autre variante du même âge dont les ventes sont concentrées récemment affiche une vitesse quasi double de sa moyenne plate (0,22 vs 0,12/j), reflétant une accélération réelle.
 - Au-delà d'un an, les données sont de toute façon jugées trop vieilles pour représenter la demande actuelle (assortiment/prix ont pu changer) - jamais chargées même si elles existent.
 
-`unitsInWindow` (unités brutes, non pondérées, sur `effectiveWindowDays`) sert séparément au calcul du taux d'écoulement (formule simple volontairement gardée non pondérée, voir section 9) - `velocityPerDay` (pondéré) sert lui à `daysOfStock`.
-
 `Variant.shopifyCreatedAt` (ajouté le 2026-07-18) vient du champ `createdAt` de l'API Shopify, absent pour les variantes synchronisées avant cette date tant que `npm run backfill:variant-created-at` n'a pas tourné (script ponctuel, un seul run nécessaire - la date de création ne change jamais). En son absence, `ageDays` est supposé égal au maximum (365j) plutôt que de sous-estimer une hypothétique variante récente sans données pour le prouver.
 
 ## 15. Prévisions de ventes
@@ -240,16 +238,6 @@ Les deux utilisent le composant générique `RankedBarChart` (une seule teinte, 
 `src/lib/insights/orderTrend.ts` :
 - `getRevenueTrend` : CA confirmé par jour, splitté B2B/B2C — graphique en aires empilées, un seul axe (montant), les deux canaux sommés = le total. Filtrable par marque (`{ vendor? }`, redescendu en SQL, corrigé le 2026-07-18 — voir section 4) ; la fenêtre (`windowDays`) est celle du sélecteur de période de la page B2B vs B2C, plus une constante séparée figée à 90j.
 - `getOrderCountTrend` : nombre de commandes confirmées vs annulées par jour — permet de suivre le taux d'annulation dans le temps plutôt qu'en instantané.
-
-## 9. Taux d'écoulement (sell-through rate)
-
-Sur la page Stock, en complément des jours de stock restant :
-
-```
-sellThroughRate(variantId) = unitsSold(30) / (unitsSold(30) + inventoryQuantity)
-```
-
-Proche de 1 = le produit tourne bien relativement à ce qui est en stock ; proche de 0 = surstock relatif à la demande actuelle. Complémentaire à `daysOfStock` : deux produits peuvent avoir le même nombre de jours de stock restant mais un taux d'écoulement très différent selon le volume de stock en jeu.
 
 ## 10. Comparaison période sur période (Overview)
 

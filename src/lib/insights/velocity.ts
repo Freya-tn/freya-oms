@@ -200,8 +200,6 @@ const MAX_DAYS_SINCE_LAST_SALE_FOR_CONFIDENCE = 60; // 2 demi-vies : au-delà, l
 export type AdaptiveVelocity = {
   /** Vitesse pondérée (récent = plus de poids) — toujours calculée, même si `confident` est faux (contexte utile). */
   velocityPerDay: number;
-  /** Unités vendues, brutes (non pondérées), sur la fenêtre effective — pour le taux d'écoulement (jamais gaté par `confident`). */
-  unitsInWindow: number;
   /** Fenêtre réellement utilisée pour cette variante (min(365j, son ancienneté réelle)). */
   effectiveWindowDays: number;
   /** Faux si le signal est trop pauvre (trop peu de ventes et/ou rien de récent) pour extrapoler un "jours restants" fiable — voir le commentaire ci-dessus. */
@@ -277,7 +275,6 @@ export async function getAdaptiveVelocityByVariant(
 
     result.set(row.variantId, {
       velocityPerDay: row.weightedUnits / weightSum,
-      unitsInWindow: row.rawUnits,
       effectiveWindowDays,
       confident,
     });

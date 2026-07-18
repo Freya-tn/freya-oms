@@ -15,7 +15,6 @@ export type StockRow = {
   velocityConfident: boolean;
   daysOfStock: number | null;
   estimatedStockoutDate: Date | null;
-  sellThroughRate: number | null;
   status: StockStatus;
 };
 
@@ -35,8 +34,8 @@ function computeStockStatus(inventoryQuantity: number, daysOfStock: number | nul
 
 /**
  * Vue "stock" complète : niveau actuel + vitesse de vente + jours restants
- * + date de rupture estimée + taux d'écoulement, pour toutes les variantes
- * (filtrable par marque et par catégorie). Vitesse de vente calculée par
+ * + date de rupture estimée, pour toutes les variantes (filtrable par
+ * marque et par catégorie). Vitesse de vente calculée par
  * `getAdaptiveVelocityByVariant` (voir velocity.ts) — pas de fenêtre fixe
  * choisie par l'utilisateur : l'algorithme s'adapte lui-même à l'ancienneté
  * de chaque variante et pondère les ventes récentes plus fort, voir
@@ -90,15 +89,6 @@ export async function getStockOverview(filters: { vendor?: string; category?: st
             return date;
           })();
 
-    // Taux d'écoulement = unités vendues (brutes, sur la fenêtre adaptative
-    // de cette variante) / (unités vendues + stock restant) — classique en
-    // gestion de stock : proche de 1 = ça tourne bien, proche de 0 = surstock
-    // relatif à la demande. Volontairement PAS pondéré comme velocityPerDay
-    // (formule simple, comparable à ce qui est documenté depuis le début).
-    const unitsSold = adaptive?.unitsInWindow ?? 0;
-    const sellThroughRate =
-      unitsSold + variant.inventoryQuantity > 0 ? unitsSold / (unitsSold + variant.inventoryQuantity) : null;
-
     return {
       variantId: variant.id,
       sku: variant.sku,
@@ -111,7 +101,6 @@ export async function getStockOverview(filters: { vendor?: string; category?: st
       velocityConfident: adaptive?.confident ?? false,
       daysOfStock,
       estimatedStockoutDate,
-      sellThroughRate,
       status: computeStockStatus(variant.inventoryQuantity, daysOfStock),
     };
   });

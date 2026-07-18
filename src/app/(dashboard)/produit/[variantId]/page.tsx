@@ -149,14 +149,6 @@ export default async function ProductProfilePage({
                   </Box>
                   <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                     <Typography variant="body2" color="text.secondary">
-                      Taux d&apos;écoulement
-                    </Typography>
-                    <Typography variant="body2">
-                      {profile.stock.sellThroughRate !== null ? percentFormatter.format(profile.stock.sellThroughRate) : "-"}
-                    </Typography>
-                  </Box>
-                  <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                    <Typography variant="body2" color="text.secondary">
                       Dernière vente
                     </Typography>
                     <Typography variant="body2">
