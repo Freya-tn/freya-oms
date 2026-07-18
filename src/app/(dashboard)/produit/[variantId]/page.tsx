@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { Box, Card, CardContent, Chip, Grid, Typography } from "@mui/material";
+import { Box, Card, CardContent, Chip, Grid, Tooltip, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBackOutlined";
 import { getProductProfile } from "@/lib/insights/productProfile";
 import { getProductSalesAndStockHistory } from "@/lib/insights/productHistory";
+import { REORDER_SAFETY_DELAY_DAYS, TARGET_COVERAGE_DAYS, VELOCITY_WINDOW_DAYS } from "@/lib/insights/reorder";
 import { formatCurrency, formatNumber, formatRelativeTime } from "@/lib/format";
 import { STATUS, ABC_TIER_COLOR, SALE_TYPE_COLOR } from "@/lib/theme/chartColors";
 import { parseAnalysisWindowParam } from "@/lib/filterParams";
@@ -41,7 +42,7 @@ export default async function ProductProfilePage({
   const { variantId } = await params;
   const { window: windowParam } = await searchParams;
   const historyWindowDays = parseAnalysisWindowParam(windowParam, DEFAULT_HISTORY_WINDOW_DAYS);
-  const [profile, history] = await Promise.all([
+  const [profile, { points: history, summary: historySummary }] = await Promise.all([
     getProductProfile(variantId),
     getProductSalesAndStockHistory(variantId, historyWindowDays),
   ]);
@@ -185,41 +186,61 @@ export default async function ProductProfilePage({
                 Réapprovisionnement
               </Typography>
               {profile.reorder ? (
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                  <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                    <Typography variant="body2" color="text.secondary">
-                      Urgence
-                    </Typography>
-                    {urgencyMeta && (
-                      <Chip label={urgencyMeta.label} size="small" sx={{ bgcolor: urgencyMeta.color, color: "#fff" }} />
-                    )}
+                <>
+                  <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                    <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+                      <Typography variant="body2" color="text.secondary">
+                        Urgence
+                      </Typography>
+                      {urgencyMeta && (
+                        <Chip label={urgencyMeta.label} size="small" sx={{ bgcolor: urgencyMeta.color, color: "#fff" }} />
+                      )}
+                    </Box>
+                    <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+                      <Tooltip title={`Calculée sur les ${VELOCITY_WINDOW_DAYS} derniers jours de disponibilité réelle (pas une fenêtre calendaire brute) - voir l'historique ci-dessous.`}>
+                        <Typography variant="body2" color="text.secondary" sx={{ textDecoration: "underline dotted" }}>
+                          Vitesse de vente utilisée
+                        </Typography>
+                      </Tooltip>
+                      <Typography variant="body2">{profile.reorder.velocityPerDay.toFixed(2)} unité(s)/j</Typography>
+                    </Box>
+                    <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+                      <Tooltip title={`Vitesse de vente x ${REORDER_SAFETY_DELAY_DAYS} j de délai fournisseur estimé (hypothèse globale, pas encore par marque) - en dessous de ce seuil, une commande est à prévoir.`}>
+                        <Typography variant="body2" color="text.secondary" sx={{ textDecoration: "underline dotted" }}>
+                          Seuil de réappro
+                        </Typography>
+                      </Tooltip>
+                      <Typography variant="body2">{Math.round(profile.reorder.reorderPoint)} unités</Typography>
+                    </Box>
+                    <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+                      <Tooltip title={`Quantité pour couvrir ${TARGET_COVERAGE_DAYS} j de vente après réception, stock actuel déduit.`}>
+                        <Typography variant="body2" color="text.secondary" sx={{ textDecoration: "underline dotted" }}>
+                          Quantité suggérée
+                        </Typography>
+                      </Tooltip>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {profile.reorder.suggestedOrderQty} unités
+                      </Typography>
+                    </Box>
+                    <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+                      <Typography variant="body2" color="text.secondary">
+                        Jours avant rupture
+                      </Typography>
+                      <Typography variant="body2">
+                        {profile.reorder.daysUntilStockout !== null ? `${Math.floor(profile.reorder.daysUntilStockout)} j` : "-"}
+                      </Typography>
+                    </Box>
                   </Box>
-                  <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                    <Typography variant="body2" color="text.secondary">
-                      Seuil de réappro
-                    </Typography>
-                    <Typography variant="body2">{Math.round(profile.reorder.reorderPoint)} unités</Typography>
-                  </Box>
-                  <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                    <Typography variant="body2" color="text.secondary">
-                      Quantité suggérée
-                    </Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {profile.reorder.suggestedOrderQty} unités
-                    </Typography>
-                  </Box>
-                  <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                    <Typography variant="body2" color="text.secondary">
-                      Jours avant rupture
-                    </Typography>
-                    <Typography variant="body2">
-                      {profile.reorder.daysUntilStockout !== null ? `${Math.floor(profile.reorder.daysUntilStockout)} j` : "-"}
-                    </Typography>
-                  </Box>
-                </Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5 }}>
+                    Basé sur les {VELOCITY_WINDOW_DAYS} derniers jours de disponibilité réelle, {REORDER_SAFETY_DELAY_DAYS} j de
+                    délai fournisseur estimé, pour une couverture visée de {TARGET_COVERAGE_DAYS} j après réception (réglable
+                    sur la page Réapprovisionnement).
+                  </Typography>
+                </>
               ) : (
                 <Typography variant="body2" color="text.secondary">
-                  Pas d&apos;urgence de réapprovisionnement actuellement (vitesse de vente nulle ou stock suffisant).
+                  Pas d&apos;urgence de réapprovisionnement actuellement (vitesse de vente nulle ou stock suffisant, sur les{" "}
+                  {VELOCITY_WINDOW_DAYS} derniers jours de disponibilité réelle).
                 </Typography>
               )}
             </CardContent>
@@ -242,6 +263,47 @@ export default async function ProductProfilePage({
           <Box sx={{ mt: 2 }}>
             <ProductHistoryChart data={history} />
           </Box>
+
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <KpiCard label="Unités vendues" value={formatNumber(historySummary.totalUnitsSold)} subtext={`sur ${historySummary.daysInWindow} j`} />
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <KpiCard label="Chiffre d'affaires" value={formatCurrency(historySummary.totalRevenue)} subtext="commandes confirmées" />
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <KpiCard label="Jours avec vente" value={String(historySummary.daysWithSales)} subtext={`sur ${historySummary.daysInWindow} j`} />
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <KpiCard
+                label="Jours de rupture"
+                value={String(historySummary.stockoutDays)}
+                subtext="rupture confirmée"
+                color={historySummary.stockoutDays > 0 ? "error" : undefined}
+              />
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <KpiCard label="Jours disponible" value={String(historySummary.availableDays)} subtext="en stock confirmé" />
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <KpiCard
+                label="Meilleur jour"
+                value={historySummary.bestDay ? `${historySummary.bestDay.unitsSold} unité(s)` : "-"}
+                subtext={
+                  historySummary.bestDay
+                    ? new Date(historySummary.bestDay.date).toLocaleDateString("fr-FR")
+                    : "aucune vente sur la période"
+                }
+              />
+            </Grid>
+          </Grid>
+
+          {historySummary.unknownDays > 0 && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5 }}>
+              {historySummary.unknownDays} j sans suivi de stock sur la période (avant le début de l&apos;historique
+              disponible pour cette variante) - ni comptés en rupture, ni en disponibilité.
+            </Typography>
+          )}
         </CardContent>
       </Card>
     </>

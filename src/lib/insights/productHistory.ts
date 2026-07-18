@@ -9,6 +9,20 @@ export type ProductHistoryPoint = {
   available: boolean | null;
 };
 
+export type ProductHistorySummary = {
+  daysInWindow: number;
+  totalUnitsSold: number;
+  totalRevenue: number;
+  daysWithSales: number;
+  /** Jours de rupture confirmée (`available === false`). */
+  stockoutDays: number;
+  /** Jours sans suivi de stock (`available === null`), jamais interprétés comme rupture ni disponibilité. */
+  unknownDays: number;
+  /** Jours avec un signal "en stock" confirmé (`available === true`). */
+  availableDays: number;
+  bestDay: { date: string; unitsSold: number } | null;
+};
+
 /**
  * Historique croisé ventes + disponibilité, jour par jour, pour UNE
  * variante — répond à "je veux voir l'effet d'une rupture sur les ventes
@@ -22,13 +36,18 @@ export type ProductHistoryPoint = {
  * laisser croire à une précision numérique que le backfill n'a pas (voir
  * docs/INSIGHTS.md, section 1, "Backfill ponctuel depuis un tracker externe").
  */
-export async function getProductSalesAndStockHistory(variantId: string, windowDays: number): Promise<ProductHistoryPoint[]> {
+export async function getProductSalesAndStockHistory(
+  variantId: string,
+  windowDays: number,
+): Promise<{ points: ProductHistoryPoint[]; summary: ProductHistorySummary }> {
   const since = daysAgo(windowDays);
   const now = new Date();
 
   const [salesRows, snapshotRows] = await Promise.all([
-    prisma.$queryRaw<Array<{ day: Date; units: number }>>(Prisma.sql`
-      SELECT date_trunc('day', o."orderCreatedAt") AS day, SUM(li."quantity")::float AS units
+    prisma.$queryRaw<Array<{ day: Date; units: number; revenue: number }>>(Prisma.sql`
+      SELECT date_trunc('day', o."orderCreatedAt") AS day,
+        SUM(li."quantity")::float AS units,
+        SUM(li."quantity" * li."unitPrice" - li."totalDiscount")::float AS revenue
       FROM "OrderLineItem" li
       JOIN "Order" o ON o.id = li."orderId"
       WHERE li."variantId" = ${variantId}
@@ -58,5 +77,22 @@ export async function getProductSalesAndStockHistory(variantId: string, windowDa
       available: availableByDay.get(key) ?? null,
     });
   }
-  return points;
+
+  const bestPoint = points.reduce<ProductHistoryPoint | null>(
+    (best, point) => (best === null || point.unitsSold > best.unitsSold ? point : best),
+    null,
+  );
+
+  const summary: ProductHistorySummary = {
+    daysInWindow: points.length,
+    totalUnitsSold: salesRows.reduce((sum, r) => sum + r.units, 0),
+    totalRevenue: salesRows.reduce((sum, r) => sum + r.revenue, 0),
+    daysWithSales: points.filter((p) => p.unitsSold > 0).length,
+    stockoutDays: points.filter((p) => p.available === false).length,
+    unknownDays: points.filter((p) => p.available === null).length,
+    availableDays: points.filter((p) => p.available === true).length,
+    bestDay: bestPoint && bestPoint.unitsSold > 0 ? { date: bestPoint.date, unitsSold: bestPoint.unitsSold } : null,
+  };
+
+  return { points, summary };
 }
