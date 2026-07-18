@@ -1,6 +1,13 @@
 import { prisma } from "@/lib/db";
 import type { StockStatus } from "@/lib/filterParams";
-import { getAdaptiveVelocityByVariant } from "./velocity";
+import { ANALYSIS_WINDOW_DAYS_MAX, ANALYSIS_WINDOW_DAYS_MIN } from "@/lib/filterParams";
+import { getVelocityByVariant } from "./velocity";
+
+// Fenêtre par défaut d'analyse — identique à celle de Réappro (décision
+// équipe 2026-07-18 : "je veux que Stock et Réappro soient iso, la logique
+// de Réappro est la bonne"), réglable par l'utilisateur via `AnalysisWindowControl`
+// (`?window=`), jamais figée en dur dans les calculs.
+export const STOCK_VELOCITY_WINDOW_DAYS = 30;
 
 export type StockRow = {
   variantId: string;
@@ -10,9 +17,10 @@ export type StockRow = {
   vendor: string | null;
   inventoryQuantity: number;
   velocityPerDay: number | null;
-  effectiveWindowDays: number | null;
-  /** Faux si le signal de vente est trop pauvre pour extrapoler "jours restants" (voir velocity.ts) — même si velocityPerDay a une valeur. */
-  velocityConfident: boolean;
+  /** Jours de disponibilité réelle effectivement trouvés (≤ la fenêtre demandée) — voir velocity.ts. */
+  availableDays: number | null;
+  /** Faux si moins de `windowDays` jours de disponibilité réelle recensés (variante trop récente, ou historique InventorySnapshot pas encore assez profond) — voir velocity.ts. */
+  sufficientData: boolean;
   daysOfStock: number | null;
   estimatedStockoutDate: Date | null;
   status: StockStatus;
@@ -33,16 +41,32 @@ function computeStockStatus(inventoryQuantity: number, daysOfStock: number | nul
 }
 
 /**
- * Vue "stock" complète : niveau actuel + vitesse de vente + jours restants
- * + date de rupture estimée, pour toutes les variantes (filtrable par
- * marque et par catégorie). Vitesse de vente calculée par
- * `getAdaptiveVelocityByVariant` (voir velocity.ts) — pas de fenêtre fixe
- * choisie par l'utilisateur : l'algorithme s'adapte lui-même à l'ancienneté
- * de chaque variante et pondère les ventes récentes plus fort, voir
- * docs/INSIGHTS.md, section "Vitesse de vente adaptative (page Stock)".
- * Voir aussi section 2 pour les cas limites (velocity = 0, inventoryQuantity = 0).
+ * Vue "stock" complète : niveau actuel + vitesse de vente + jours restants +
+ * date de rupture estimée, pour toutes les variantes (filtrable par marque
+ * et par catégorie). Vitesse de vente calculée par `getVelocityByVariant`
+ * (voir velocity.ts) — **la même fonction que Réappro** (décision équipe
+ * 2026-07-18, corrige un biais réel : l'ancien calcul adaptatif/pondéré
+ * traitait les jours de RUPTURE comme des jours "sans demande", diluant la
+ * vitesse d'un produit qui vendait bien juste avant d'être en rupture, comme
+ * si la demande avait disparu). `windowDays` réglable par l'utilisateur via
+ * le même slider que Réappro (`?window=`, `AnalysisWindowControl.tsx`).
+ *
+ * Compromis assumé (vérifié le 2026-07-18) : un produit plus jeune que
+ * `windowDays` ne peut jamais atteindre `sufficientData: true` (il n'a
+ * simplement pas encore assez de jours de disponibilité réelle à montrer),
+ * contrairement à l'ancien calcul adaptatif qui bornait sa fenêtre à
+ * l'ancienneté réelle du produit pour lui donner quand même une estimation.
+ * Cohérent avec le principe déjà validé pour dormants/réappro ("soit on a
+ * l'info fiable, soit on ne dit rien") plutôt qu'une exception pour Stock.
  */
-export async function getStockOverview(filters: { vendor?: string; category?: string } = {}): Promise<StockRow[]> {
+export async function getStockOverview(
+  filters: { vendor?: string; category?: string; windowDays?: number } = {},
+): Promise<StockRow[]> {
+  const windowDays = Math.min(
+    ANALYSIS_WINDOW_DAYS_MAX,
+    Math.max(ANALYSIS_WINDOW_DAYS_MIN, filters.windowDays ?? STOCK_VELOCITY_WINDOW_DAYS),
+  );
+
   const [variants, velocity] = await Promise.all([
     prisma.variant.findMany({
       where:
@@ -63,19 +87,17 @@ export async function getStockOverview(filters: { vendor?: string; category?: st
       },
       orderBy: { syncedAt: "desc" },
     }),
-    getAdaptiveVelocityByVariant({ vendor: filters.vendor, category: filters.category }),
+    getVelocityByVariant(windowDays, { vendor: filters.vendor, category: filters.category }),
   ]);
 
   return variants.map((variant) => {
-    const adaptive = velocity.get(variant.id) ?? null;
-    const velocityPerDay = adaptive?.velocityPerDay ?? null;
-    // "jours restants" n'est extrapolé que si le signal est jugé fiable
-    // (`confident`, voir velocity.ts) — sinon on préfère dire "on ne sait
-    // pas" plutôt que d'afficher un nombre fabriqué à partir d'un historique
-    // trop pauvre/trop ancien (ex réel du 2026-07-18 : "11896 jours" pour une
-    // variante à 3 ventes au total, rien depuis 86 jours). `velocityPerDay`
-    // reste affiché tel quel (contexte utile), seule l'extrapolation est gatée.
-    const canEstimateStockout = adaptive !== null && adaptive.confident && velocityPerDay !== null && velocityPerDay > 0;
+    const result = velocity.get(variant.id) ?? null;
+    const velocityPerDay = result?.velocityPerDay ?? null;
+    // "jours restants" n'est extrapolé que si on a assez de jours de
+    // disponibilité réelle recensés (`sufficientData`, voir velocity.ts) —
+    // sinon on préfère dire "on ne sait pas" plutôt qu'un nombre fabriqué à
+    // partir d'un historique trop court (même principe que dormants/réappro).
+    const canEstimateStockout = result !== null && result.sufficientData && velocityPerDay !== null && velocityPerDay > 0;
 
     const daysOfStock =
       variant.inventoryQuantity === 0 ? 0 : canEstimateStockout ? variant.inventoryQuantity / velocityPerDay! : null;
@@ -97,8 +119,8 @@ export async function getStockOverview(filters: { vendor?: string; category?: st
       vendor: variant.product.vendor,
       inventoryQuantity: variant.inventoryQuantity,
       velocityPerDay,
-      effectiveWindowDays: adaptive?.effectiveWindowDays ?? null,
-      velocityConfident: adaptive?.confident ?? false,
+      availableDays: result?.availableDays ?? null,
+      sufficientData: result?.sufficientData ?? false,
       daysOfStock,
       estimatedStockoutDate,
       status: computeStockStatus(variant.inventoryQuantity, daysOfStock),

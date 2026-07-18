@@ -5,7 +5,8 @@ import { Chip, Link as MuiLink, Tooltip } from "@mui/material";
 import NextLink from "next/link";
 import type { StockRow } from "@/lib/insights/stockDays";
 
-const columns: GridColDef<StockRow>[] = [
+function buildColumns(windowDays: number): GridColDef<StockRow>[] {
+  return [
   { field: "sku", headerName: "SKU", width: 140 },
   { field: "vendor", headerName: "Marque", width: 130 },
   {
@@ -23,23 +24,22 @@ const columns: GridColDef<StockRow>[] = [
   { field: "inventoryQuantity", headerName: "Stock", width: 100, type: "number" },
   {
     field: "velocityPerDay",
-    headerName: "Ventes/jour",
-    width: 130,
+    headerName: `Ventes/jour (${windowDays}j dispo)`,
+    width: 160,
     type: "number",
     renderCell: (params) => {
       const { value, row } = params;
       if (value === null) return <span>-</span>;
-      const days = row.effectiveWindowDays !== null ? Math.round(row.effectiveWindowDays) : null;
       const text = (value as number).toFixed(2);
-      const windowNote =
-        days !== null
-          ? `Calculée sur les ${days} derniers jours (${days < 365 ? "produit ajouté récemment, jamais dilué par une période antérieure à sa création" : "1 an d'historique, ventes récentes pondérées plus fort"}).`
-          : "Ancienneté de la variante inconnue.";
-      const confidenceNote = row.velocityConfident
+      const availableDaysNote =
+        row.availableDays !== null
+          ? `Calculée sur les ${row.availableDays} derniers jours où la variante a réellement eu du stock (pas des jours calendaires bruts).`
+          : "Historique de disponibilité inconnu.";
+      const confidenceNote = row.sufficientData
         ? ""
-        : " Pas assez de ventes récentes pour en déduire un nombre de jours restants fiable : ce chiffre reste indicatif, mais aucune extrapolation n'est affichée dans la colonne \"Jours restants\".";
+        : " Pas assez de jours de disponibilité réelle recensés pour en déduire un nombre de jours restants fiable : ce chiffre reste indicatif, mais aucune extrapolation n'est affichée dans la colonne \"Jours restants\".";
       return (
-        <Tooltip title={windowNote + confidenceNote}>
+        <Tooltip title={availableDaysNote + confidenceNote}>
           <span>{text}</span>
         </Tooltip>
       );
@@ -68,13 +68,14 @@ const columns: GridColDef<StockRow>[] = [
     width: 150,
     valueFormatter: (value: Date | null) => (value ? new Date(value).toLocaleDateString("fr-FR") : "-"),
   },
-];
+  ];
+}
 
-export function StockTable({ rows }: { rows: StockRow[] }) {
+export function StockTable({ rows, windowDays }: { rows: StockRow[]; windowDays: number }) {
   return (
     <DataGrid
       rows={rows}
-      columns={columns}
+      columns={buildColumns(windowDays)}
       getRowId={(row) => row.variantId}
       initialState={{
         sorting: { sortModel: [{ field: "daysOfStock", sort: "asc" }] },

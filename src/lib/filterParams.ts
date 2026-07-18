@@ -36,7 +36,7 @@ export const STOCK_STATUS_OPTIONS = [
   { value: "critical", label: "Critique (< 7 j)" },
   { value: "low", label: "Faible (< 21 j)" },
   { value: "ok", label: "Ok" },
-  { value: "unknown", label: "Pas de vente récente" },
+  { value: "unknown", label: "Historique insuffisant" },
 ] as const;
 
 export type StockStatus = (typeof STOCK_STATUS_OPTIONS)[number]["value"];

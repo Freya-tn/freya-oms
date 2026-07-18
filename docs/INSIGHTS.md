@@ -55,13 +55,13 @@ velocity(variantId, windowDays) =
 
 `getPriorVelocityByVariant` désigne le bloc de `windowDays` jours de disponibilité réelle **immédiatement avant** celui de `getVelocityByVariant` (rangs `windowDays+1` à `2×windowDays`) — pas nécessairement les mêmes dates calendaires que l'ancienne fenêtre "jours -60 à -30", puisque les deux blocs sautent par-dessus les jours d'indisponibilité.
 
-Peut être splitté par `Order.channel` pour comparer la vitesse B2B vs B2C sur le même produit. Utilisée par `reorder.ts` (30j de disponibilité par défaut, réglable par l'utilisateur — voir section 5) et `dormant.ts` (60j de disponibilité, fixe), qui répondent chacun à une question précise ("est-ce chaud maintenant ?", "est-ce que ça a arrêté de bouger ?"). La page Stock, elle, utilise un calcul différent (`getAdaptiveVelocityByVariant`, section suivante) car sa question est différente : "quel est le rythme de vente actuel, tout bien considéré ?" — cet algo n'a PAS été touché par ce correctif (question différente, pas le même bug).
+Peut être splitté par `Order.channel` pour comparer la vitesse B2B vs B2C sur le même produit. Utilisée par `reorder.ts` (30j de disponibilité par défaut, réglable par l'utilisateur — voir section 5), `dormant.ts` (60j de disponibilité, fixe) et, **depuis le 2026-07-18, par la page Stock elle-même** (`stockDays.ts`, 30j par défaut, réglable par l'utilisateur via le même slider que Réappro) — les trois répondent en fait à la même question ("est-ce que ce produit se vend, en ignorant les périodes où il n'y avait justement rien à vendre ?"), donc au même calcul.
 
-### Vitesse de vente adaptative (page Stock)
+### Vitesse de vente adaptative — désormais réservée au moteur de prévisions
 
-**Problème découvert le 2026-07-17** : diviser par une fenêtre fixe (ex: 365j) sous-estime massivement un produit ajouté récemment - un produit vendu 20 fois en 14 jours réels montrerait 20/365 = 0,05 unité/jour au lieu de sa vraie vitesse ~1,4/jour, faussant `daysOfStock` et son statut (pourrait paraître "OK" alors qu'il part vite). À l'inverse, une simple moyenne plate sur un an réagit trop lentement si la demande d'un produit ancien change réellement (une accélération récente est noyée dans 11 mois d'historique plus calme).
+**Changement du 2026-07-18** : la page Stock utilisait ce calcul (`getAdaptiveVelocityByVariant`) jusqu'au 2026-07-18. Retour utilisateur : "je veux que Stock et Réappro soient iso, la logique de Réappro est la bonne". Vérifié sur un cas réel avant de trancher (`B_PATCH_SKIN1004`, 29 unités vendues sur 365j glissants, mais rien vendu depuis 102 jours) : l'ancien calcul adaptatif affichait 0,03 unité/jour (la rupture récente, bien réelle, était comptée comme une baisse de la demande - exactement le même biais déjà corrigé pour reorder.ts/dormant.ts, voir plus haut dans cette section), alors que le nouveau calcul de Stock (disponibilité réelle, sans décroissance temporelle, voir ci-dessus) retrouve 0,43 unité/jour en allant chercher la dernière période où le produit avait vraiment du stock - cohérent avec ses 16 commandes réelles de décembre 2025 à avril 2026. **Compromis assumé** en unifiant Stock sur la logique de Réappro : un produit plus jeune que la fenêtre choisie (défaut 30j) ne peut jamais atteindre `sufficientData: true`, même s'il se vend très bien depuis son lancement - contrairement à l'ancien calcul qui bornait sa fenêtre à l'âge réel du produit pour lui donner quand même une estimation. Assumé comme cohérent avec le principe déjà validé pour dormants/réappro ("soit on a l'info fiable, soit on ne dit rien") plutôt qu'une exception pour Stock.
 
-`getAdaptiveVelocityByVariant` (`src/lib/insights/velocity.ts`) répond aux deux à la fois, sans paramètre à régler à la main :
+`getAdaptiveVelocityByVariant` (`src/lib/insights/velocity.ts`) reste utilisé, inchangé, par `forecast.ts` (`getBaseUnitsRate`, voir section 15) - une question différente ("quel est le taux de base agrégé sur tout un périmètre pour extrapoler un mois entier", qui a besoin d'une fenêtre continue même en cas de rupture partielle), pas concernée par ce changement :
 
 ```
 ageDays(variantId)         = jours depuis Variant.shopifyCreatedAt
@@ -73,10 +73,10 @@ velocityPerDay(variantId)  = weightedUnits(variantId) / weightSum
 ```
 
 - **Produit récent** (< 1 an) : `effectiveWindowDays` = son âge réel, jamais la fenêtre max - un produit de 23 jours n'est JAMAIS jugé sur 365 jours dont 342 où il n'existait pas.
-- **Produit ancien avec beaucoup d'historique** : jusqu'à 1 an de données utilisé (`effectiveWindowDays = 365`), mais chaque vente pèse selon son ancienneté (demi-vie 30j : une vente d'il y a 30 jours compte moitié moins qu'une vente d'aujourd'hui) - vérifié sur données réelles (2026-07-17) : une variante de 995 jours avec une seule vente il y a ~360 jours et rien depuis affiche une vitesse quasi nulle (0,00001/j) plutôt que la moyenne plate trompeuse (1/365 = 0,003/j qui suggérerait une demande stable alors qu'elle s'est arrêtée) ; une autre variante du même âge dont les ventes sont concentrées récemment affiche une vitesse quasi double de sa moyenne plate (0,22 vs 0,12/j), reflétant une accélération réelle.
-- Au-delà d'un an, les données sont de toute façon jugées trop vieilles pour représenter la demande actuelle (assortiment/prix ont pu changer) - jamais chargées même si elles existent.
+- **Produit ancien avec beaucoup d'historique** : jusqu'à 1 an de données utilisé (`effectiveWindowDays = 365`), mais chaque vente pèse selon son ancienneté (demi-vie 30j) - vérifié sur données réelles (2026-07-17) : une variante de 995 jours avec une seule vente il y a ~360 jours et rien depuis affiche une vitesse quasi nulle (0,00001/j) plutôt que la moyenne plate trompeuse (1/365 = 0,003/j).
+- Au-delà d'un an, les données sont de toute façon jugées trop vieilles pour représenter la demande actuelle - jamais chargées même si elles existent.
 
-`Variant.shopifyCreatedAt` (ajouté le 2026-07-18) vient du champ `createdAt` de l'API Shopify, absent pour les variantes synchronisées avant cette date tant que `npm run backfill:variant-created-at` n'a pas tourné (script ponctuel, un seul run nécessaire - la date de création ne change jamais). En son absence, `ageDays` est supposé égal au maximum (365j) plutôt que de sous-estimer une hypothétique variante récente sans données pour le prouver.
+`Variant.shopifyCreatedAt` (ajouté le 2026-07-18) vient du champ `createdAt` de l'API Shopify, absent pour les variantes synchronisées avant cette date tant que `npm run backfill:variant-created-at` n'a pas tourné. En son absence, `ageDays` est supposé égal au maximum (365j) plutôt que de sous-estimer une hypothétique variante récente sans données pour le prouver.
 
 ## 15. Prévisions de ventes
 
@@ -122,10 +122,10 @@ daysOfStock(variantId) = Variant.inventoryQuantity / velocity(variantId, 30)
 estimatedStockoutDate  = today + daysOfStock(variantId) jours
 ```
 
-(Page Stock : `velocity` ici est `getAdaptiveVelocityByVariant`, voir ci-dessus - pas une fenêtre fixe de 30j.)
+(Page Stock : `velocity` ici est `getVelocityByVariant`, voir section 1 - jours de disponibilité réelle, fenêtre réglable par l'utilisateur, défaut 30j, identique à Réappro depuis le 2026-07-18.)
 
 Cas limites à gérer explicitement dans le code (pas juste laisser diviser par zéro) :
-- `velocity = 0` → pas de vitesse de vente sur la fenêtre → `daysOfStock = null` ("pas de rupture prévisible" plutôt qu'Infinity).
+- `velocity = 0` ou `sufficientData = false` → pas de vitesse de vente fiable sur la fenêtre → `daysOfStock = null` ("pas de rupture prévisible" plutôt qu'Infinity).
 - `inventoryQuantity = 0` → `daysOfStock = 0`, produit déjà en rupture, à faire remonter en priorité dans l'UI indépendamment de la vitesse.
 
 ## 3. Produits dormants / surstock
