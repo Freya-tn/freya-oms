@@ -18,6 +18,14 @@ import { prisma } from "../lib/db";
  *   ne permet pas de savoir laquelle des variantes était en rupture avec ces
  *   données, donc jamais rien inféré pour ces cas plutôt qu'une supposition
  *   risquée.
+ * - **Jamais backfillé avant `Variant.shopifyCreatedAt`** (bug réel corrigé
+ *   le 2026-07-18, découvert par l'utilisateur sur "Double Cleansing Duo" :
+ *   le tracker Mongo ne liste que les produits DÉJÀ dans le catalogue au
+ *   moment du jour concerné — un produit pas encore lancé n'apparaît dans
+ *   AUCUNE liste ce jour-là, ni "en rupture" ni "en stock", donc l'absence
+ *   de mention ne prouve rien avant sa création réelle). Une variante sans
+ *   `shopifyCreatedAt` connu (voir `npm run backfill:variant-created-at`)
+ *   n'est PAS backfillée du tout, plutôt que de risquer la même erreur.
  * - Quantité inconnue : on ne backfille qu'un signal binaire (disponible /
  *   en rupture), jamais une quantité précise inventée. `quantity = 1` marque
  *   "on sait qu'il y avait du stock ce jour-là" (seul le signe compte pour
@@ -73,36 +81,53 @@ async function main() {
     `Historique réel démarre le ${cutoff.toISOString().slice(0, 10)} — ${relevantDocs.length}/${docs.length} jours Mongo backfillables avant cette date.`,
   );
 
-  // Matching : titre exact (insensible casse) -> produit à variante unique.
+  // Matching : titre exact (insensible casse) -> produit à variante unique,
+  // avec sa date de création Shopify (jamais backfillée avant cette date).
   const products = await prisma.product.findMany({
-    select: { title: true, variants: { select: { id: true } } },
+    select: { title: true, variants: { select: { id: true, shopifyCreatedAt: true } } },
   });
-  const singleVariantByTitle = new Map<string, string>();
+  const singleVariantByTitle = new Map<string, { variantId: string; shopifyCreatedAt: Date | null }>();
   let multiVariantSkipped = 0;
+  let noCreatedAtSkipped = 0;
   for (const p of products) {
-    if (p.variants.length === 1) singleVariantByTitle.set(p.title.trim().toLowerCase(), p.variants[0].id);
-    else if (p.variants.length > 1) multiVariantSkipped++;
+    if (p.variants.length !== 1) {
+      if (p.variants.length > 1) multiVariantSkipped++;
+      continue;
+    }
+    const [variant] = p.variants;
+    if (!variant.shopifyCreatedAt) {
+      noCreatedAtSkipped++;
+      continue;
+    }
+    singleVariantByTitle.set(p.title.trim().toLowerCase(), { variantId: variant.id, shopifyCreatedAt: variant.shopifyCreatedAt });
   }
 
   const mongoTitles = new Set<string>();
   for (const d of relevantDocs) for (const item of d.products) mongoTitles.add(item.title);
   const matchedTitles = [...mongoTitles].filter((t) => singleVariantByTitle.has(t.trim().toLowerCase()));
   console.log(
-    `${mongoTitles.size} titres distincts dans Mongo, ${matchedTitles.length} matchés à une variante unique (${multiVariantSkipped} produits multi-variantes existants dans le catalogue, jamais backfillés).`,
+    `${mongoTitles.size} titres distincts dans Mongo, ${matchedTitles.length} matchés à une variante unique avec date de création connue ` +
+      `(${multiVariantSkipped} produits multi-variantes, ${noCreatedAtSkipped} sans shopifyCreatedAt connu — ni l'un ni l'autre jamais backfillés).`,
   );
 
   const rows: Array<{ variantId: string; quantity: number; recordedAt: Date }> = [];
+  let skippedBeforeCreation = 0;
   for (const doc of relevantDocs) {
     const day = new Date(
       Date.UTC(new Date(doc.date).getUTCFullYear(), new Date(doc.date).getUTCMonth(), new Date(doc.date).getUTCDate()),
     );
     const outOfStockTitles = new Set(doc.products.map((p) => p.title.trim().toLowerCase()));
     for (const title of matchedTitles) {
-      const variantId = singleVariantByTitle.get(title.trim().toLowerCase())!;
+      const { variantId, shopifyCreatedAt } = singleVariantByTitle.get(title.trim().toLowerCase())!;
+      if (shopifyCreatedAt && day < shopifyCreatedAt) {
+        skippedBeforeCreation++;
+        continue; // le produit n'existait pas encore ce jour-là : l'absence de mention "en rupture" ne prouve rien.
+      }
       const outOfStock = outOfStockTitles.has(title.trim().toLowerCase());
       rows.push({ variantId, quantity: outOfStock ? 0 : 1, recordedAt: day });
     }
   }
+  console.log(`${skippedBeforeCreation} jours sautés (antérieurs à la création Shopify de la variante concernée).`);
 
   const positiveCount = rows.filter((r) => r.quantity > 0).length;
   console.log(
