@@ -2,11 +2,17 @@ import Link from "next/link";
 import { Box, Card, CardContent, Chip, Grid, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBackOutlined";
 import { getProductProfile } from "@/lib/insights/productProfile";
+import { getProductSalesAndStockHistory } from "@/lib/insights/productHistory";
 import { formatCurrency, formatNumber, formatRelativeTime } from "@/lib/format";
 import { STATUS, ABC_TIER_COLOR, SALE_TYPE_COLOR } from "@/lib/theme/chartColors";
+import { parseAnalysisWindowParam } from "@/lib/filterParams";
 import { KpiCard } from "@/components/KpiCard";
+import { ProductHistoryChart } from "@/components/ProductHistoryChart";
+import { AnalysisWindowControl } from "@/components/AnalysisWindowControl";
 
 export const dynamic = "force-dynamic";
+
+const DEFAULT_HISTORY_WINDOW_DAYS = 180;
 
 const percentFormatter = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 1 });
 
@@ -27,11 +33,18 @@ const URGENCY_LABEL: Record<string, { label: string; color: string }> = {
 
 export default async function ProductProfilePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ variantId: string }>;
+  searchParams: Promise<{ window?: string }>;
 }) {
   const { variantId } = await params;
-  const profile = await getProductProfile(variantId);
+  const { window: windowParam } = await searchParams;
+  const historyWindowDays = parseAnalysisWindowParam(windowParam, DEFAULT_HISTORY_WINDOW_DAYS);
+  const [profile, history] = await Promise.all([
+    getProductProfile(variantId),
+    getProductSalesAndStockHistory(variantId, historyWindowDays),
+  ]);
 
   if (!profile) {
     return (
@@ -213,6 +226,24 @@ export default async function ProductProfilePage({
           </Card>
         </Grid>
       </Grid>
+
+      <Card sx={{ mt: 3 }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>
+            Historique ventes &amp; stock
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Comment ça marche : chaque barre est le nombre d&apos;unités vendues ce jour-là (commandes confirmées).
+            Les bandes rouges marquent une rupture confirmée, les bandes grises une période sans suivi de stock
+            (avant le début de l&apos;historique disponible pour cette variante) - jamais présentées comme une
+            vraie quantité de stock, seulement disponible/en rupture/inconnu.
+          </Typography>
+          <AnalysisWindowControl defaultValue={historyWindowDays} />
+          <Box sx={{ mt: 2 }}>
+            <ProductHistoryChart data={history} />
+          </Box>
+        </CardContent>
+      </Card>
     </>
   );
 }

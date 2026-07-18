@@ -1,7 +1,7 @@
 "use client";
 
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
-import { Chip, Link as MuiLink, Tooltip } from "@mui/material";
+import { Chip, Link as MuiLink } from "@mui/material";
 import NextLink from "next/link";
 import type { StockRow } from "@/lib/insights/stockDays";
 
@@ -23,26 +23,47 @@ function buildColumns(windowDays: number): GridColDef<StockRow>[] {
   { field: "title", headerName: "Variante", flex: 1, minWidth: 160 },
   { field: "inventoryQuantity", headerName: "Stock", width: 100, type: "number" },
   {
+    field: "availableDays",
+    headerName: "Historique disponible",
+    description: `Nombre de jours de disponibilité réelle trouvés pour cette variante, sur les ${windowDays}j demandés (réglage ci-dessus). En dessous de ${windowDays}j, le calcul est basé sur moins de recul que demandé - réduisez la fenêtre pour retrouver une estimation fiable sur cette variante.`,
+    width: 190,
+    sortable: true,
+    renderCell: (params) => {
+      const { row } = params;
+      if (row.availableDays === null) {
+        return (
+          <span title="Aucun historique de disponibilité trouvé pour cette variante.">
+            <Chip label="Aucun historique" size="small" variant="outlined" color="warning" />
+          </span>
+        );
+      }
+      return (
+        <span
+          title={
+            row.sufficientData
+              ? `${row.availableDays}j de disponibilité réelle trouvés, la fenêtre de ${windowDays}j demandée est entièrement couverte.`
+              : `Seulement ${row.availableDays}j de disponibilité réelle trouvés sur les ${windowDays}j demandés (max disponible pour cette variante) - réduisez la fenêtre d'analyse à ${row.availableDays}j ou moins pour obtenir une estimation fiable ici.`
+          }
+        >
+          <Chip
+            label={`${row.availableDays} / ${windowDays} j`}
+            size="small"
+            variant="outlined"
+            color={row.sufficientData ? "default" : "warning"}
+          />
+        </span>
+      );
+    },
+  },
+  {
     field: "velocityPerDay",
-    headerName: `Ventes/jour (${windowDays}j dispo)`,
-    width: 160,
+    headerName: "Ventes/jour",
+    width: 120,
     type: "number",
     renderCell: (params) => {
-      const { value, row } = params;
+      const { value } = params;
       if (value === null) return <span>-</span>;
-      const text = (value as number).toFixed(2);
-      const availableDaysNote =
-        row.availableDays !== null
-          ? `Calculée sur les ${row.availableDays} derniers jours où la variante a réellement eu du stock (pas des jours calendaires bruts).`
-          : "Historique de disponibilité inconnu.";
-      const confidenceNote = row.sufficientData
-        ? ""
-        : " Pas assez de jours de disponibilité réelle recensés pour en déduire un nombre de jours restants fiable : ce chiffre reste indicatif, mais aucune extrapolation n'est affichée dans la colonne \"Jours restants\".";
-      return (
-        <Tooltip title={availableDaysNote + confidenceNote}>
-          <span>{text}</span>
-        </Tooltip>
-      );
+      return <span>{(value as number).toFixed(2)}</span>;
     },
   },
   {

@@ -64,7 +64,11 @@ export function parseCoverageParam(value: string | undefined, fallback: number):
 }
 
 export const ANALYSIS_WINDOW_DAYS_MIN = 14;
-export const ANALYSIS_WINDOW_DAYS_MAX = 120;
+// 365j = le plafond absolu de recherche de disponibilité (VELOCITY_MAX_LOOKBACK_DAYS
+// dans velocity.ts, "jamais chercher plus loin qu'un an") - au-delà, les
+// données sont jugées trop vieilles pour représenter la demande actuelle,
+// donc 365j est le vrai maximum utile, pas une limite arbitraire.
+export const ANALYSIS_WINDOW_DAYS_MAX = 365;
 
 /** Parse le paramètre `window` (fenêtre d'analyse réappro, en jours de disponibilité réelle) — borné, avec repli. */
 export function parseAnalysisWindowParam(value: string | undefined, fallback: number): number {

@@ -6,7 +6,10 @@ import { Box, Chip, Slider, Typography } from "@mui/material";
 import QueryStatsOutlinedIcon from "@mui/icons-material/QueryStatsOutlined";
 import { ANALYSIS_WINDOW_DAYS_MAX, ANALYSIS_WINDOW_DAYS_MIN } from "@/lib/filterParams";
 
-const MARKS = [14, 30, 60, 90, 120].map((value) => ({ value, label: `${value}j` }));
+const MARKS = [14, 30, 60, 90, 120, 180, 365].map((value) => ({
+  value,
+  label: value === 365 ? "365j (max)" : `${value}j`,
+}));
 
 /**
  * Fenêtre d'analyse (jours de disponibilité réelle utilisés pour la vitesse
