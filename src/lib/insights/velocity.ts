@@ -1,75 +1,161 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { OrderChannel } from "@/generated/prisma/enums";
-import { confirmedOrderFilter } from "./common";
 
 type VelocityFilters = { channel?: OrderChannel; vendor?: string; category?: string };
 
-async function velocityForRange(
-  since: Date,
-  until: Date,
-  windowDays: number,
-  filters: VelocityFilters,
-): Promise<Map<string, number>> {
-  const grouped = await prisma.orderLineItem.groupBy({
-    by: ["variantId"],
-    where: {
-      variantId: { not: null },
-      ...(filters.vendor || filters.category
-        ? {
-            variant: {
-              product: {
-                ...(filters.vendor ? { vendor: filters.vendor } : {}),
-                ...(filters.category ? { productType: filters.category } : {}),
-              },
-            },
-          }
-        : {}),
-      order: {
-        ...confirmedOrderFilter(),
-        orderCreatedAt: { gte: since, lt: until },
-        ...(filters.channel ? { channel: filters.channel } : {}),
-      },
-    },
-    _sum: { quantity: true },
-  });
+/**
+ * Depuis combien de jours `InventorySnapshot` est alimenté (poll le plus
+ * ancien connu, tous variantes confondues) — permet aux pages Dormants/
+ * Réappro d'estimer quand assez de profondeur sera accumulée pour donner des
+ * résultats fiables (voir `VelocityResult.sufficientData`). Reconstituer cet
+ * historique rétroactivement n'est PAS possible : l'API Shopify n'expose que
+ * le stock ACTUEL (`InventoryLevel`), pas d'historique interrogeable — voir
+ * docs/INSIGHTS.md, section 1, "Pourquoi cet historique ne peut pas être
+ * rattrapé depuis Shopify".
+ */
+export async function getInventoryHistoryDepthDays(): Promise<number> {
+  const result = await prisma.inventorySnapshot.aggregate({ _min: { recordedAt: true } });
+  if (!result._min.recordedAt) return 0;
+  return Math.max(0, Math.floor((Date.now() - result._min.recordedAt.getTime()) / 86_400_000));
+}
 
-  const velocity = new Map<string, number>();
-  for (const row of grouped) {
-    if (!row.variantId) continue;
-    velocity.set(row.variantId, (row._sum.quantity ?? 0) / windowDays);
+// Jamais chercher de disponibilité plus vieille qu'un an — même borne que
+// l'algo adaptatif de la page Stock (ADAPTIVE_MAX_LOOKBACK_DAYS), pour rester
+// cohérent : au-delà, l'historique n'est plus représentatif de la demande
+// actuelle.
+const VELOCITY_MAX_LOOKBACK_DAYS = 365;
+
+export type VelocityResult = {
+  velocityPerDay: number;
+  /** Nombre de jours de disponibilité réelle effectivement trouvés (≤ la taille du bloc demandé). */
+  availableDays: number;
+  /**
+   * Faux si `availableDays` n'atteint pas la taille du bloc demandé — soit la
+   * variante n'a tout simplement pas encore assez de recul (nouvelle, ou
+   * jamais restée en stock aussi longtemps), soit `InventorySnapshot` n'a pas
+   * encore accumulé assez de profondeur (ex: base fraîchement initialisée).
+   * Décision équipe 2026-07-18 : dans les deux cas, ne JAMAIS présenter le
+   * chiffre comme fiable — mieux vaut ne rien afficher que d'afficher une
+   * vitesse extrapolée sur un signal trop court. Voir docs/INSIGHTS.md,
+   * section 1.
+   */
+  sufficientData: boolean;
+};
+
+// Vitesse de vente (unités/jour) calculée sur les `rankEnd - rankStart + 1`
+// derniers JOURS DE DISPONIBILITÉ RÉELLE d'une variante (pas des jours
+// calendaires) — quitte à remonter jusqu'à un an en arrière pour les
+// retrouver si la variante est en rupture depuis longtemps. Corrige un bug
+// réel signalé le 2026-07-18 : diviser par la fenêtre calendaire complète
+// dilue artificiellement la vitesse d'un produit qui vend bien mais a été
+// en rupture une bonne partie de la période (best-seller réapprovisionné
+// récemment, ou carrément en rupture depuis le début de la fenêtre) — ça le
+// fait passer à tort pour "dormant" (dormant.ts) ou "sans vente" (exclu du
+// réappro par reorder.ts, alors que c'est justement lui qu'il faut racheter).
+//
+// "Disponible" = au moins un poll de synchro (InventorySnapshot) ce jour-là
+// avec quantity > 0 — un jour est compté en entier même si le stock s'est
+// épuisé en cours de journée (poll horaire par défaut, pas de suivi
+// infra-journalier plus fin, cohérent avec l'architecture "polling
+// uniquement" du projet).
+//
+// `rankStart`/`rankEnd` sont 1-indexés et comptent les jours disponibles en
+// partant du plus récent (rank 1 = dernier jour disponible connu). Ça permet
+// à `getPriorVelocityByVariant` de désigner "le bloc de jours disponibles
+// juste avant celui-ci", même si les deux blocs ne couvrent pas les mêmes
+// dates calendaires selon les variantes.
+async function velocityByAvailableDayRank(
+  rankStart: number,
+  rankEnd: number,
+  filters: VelocityFilters,
+): Promise<Map<string, VelocityResult>> {
+  const blockSize = rankEnd - rankStart + 1;
+  const now = new Date();
+  const lookbackFloor = new Date(now.getTime() - VELOCITY_MAX_LOOKBACK_DAYS * 86_400_000);
+
+  const rows = await prisma.$queryRaw<Array<{ variantId: string; units: number | null; availableDays: number }>>(
+    Prisma.sql`
+    WITH available_days AS (
+      SELECT
+        "variantId",
+        day,
+        ROW_NUMBER() OVER (PARTITION BY "variantId" ORDER BY day DESC) AS rn
+      FROM (
+        SELECT DISTINCT s."variantId", date_trunc('day', s."recordedAt") AS day
+        FROM "InventorySnapshot" s
+        JOIN "Variant" v ON v.id = s."variantId"
+        ${filters.vendor || filters.category ? Prisma.sql`JOIN "Product" p ON p.id = v."productId"` : Prisma.empty}
+        WHERE s.quantity > 0
+          AND s."recordedAt" >= ${lookbackFloor}::timestamptz
+          AND s."recordedAt" <= ${now}::timestamptz
+          ${filters.vendor ? Prisma.sql`AND p.vendor = ${filters.vendor}` : Prisma.empty}
+          ${filters.category ? Prisma.sql`AND p."productType" = ${filters.category}` : Prisma.empty}
+      ) distinct_days
+    ),
+    selected_days AS (
+      SELECT "variantId", day FROM available_days WHERE rn BETWEEN ${rankStart} AND ${rankEnd}
+    ),
+    day_counts AS (
+      SELECT "variantId", COUNT(*)::int AS "availableDays" FROM selected_days GROUP BY "variantId"
+    ),
+    sales AS (
+      SELECT sd."variantId", SUM(li.quantity)::float AS units
+      FROM selected_days sd
+      JOIN "OrderLineItem" li ON li."variantId" = sd."variantId"
+      JOIN "Order" o ON o.id = li."orderId" AND date_trunc('day', o."orderCreatedAt") = sd.day
+      WHERE o."isConfirmed" = true AND o."cancelledAt" IS NULL
+        ${filters.channel ? Prisma.sql`AND o."channel" = ${filters.channel}` : Prisma.empty}
+      GROUP BY sd."variantId"
+    )
+    SELECT dc."variantId" AS "variantId", COALESCE(s.units, 0) AS units, dc."availableDays" AS "availableDays"
+    FROM day_counts dc
+    LEFT JOIN sales s ON s."variantId" = dc."variantId"
+  `,
+  );
+
+  const velocity = new Map<string, VelocityResult>();
+  for (const row of rows) {
+    if (row.availableDays <= 0) continue;
+    velocity.set(row.variantId, {
+      velocityPerDay: (row.units ?? 0) / row.availableDays,
+      availableDays: row.availableDays,
+      sufficientData: row.availableDays >= blockSize,
+    });
   }
   return velocity;
 }
 
 /**
- * Vitesse de vente (unités/jour) par variante sur une fenêtre glissante se
- * terminant aujourd'hui. Voir docs/INSIGHTS.md, section 1.
+ * Vitesse de vente (unités/jour) par variante sur les `windowDays` derniers
+ * jours de disponibilité réelle (pas une fenêtre calendaire fixe). Voir
+ * docs/INSIGHTS.md, section 1, et le commentaire de `velocityByAvailableDayRank`
+ * pour la justification complète. Une variante sans aucun jour de
+ * disponibilité connu sur les 365 derniers jours (jamais en stock, ou
+ * historique de snapshots pas encore assez profond) est absente de la Map ;
+ * une variante présente mais avec `sufficientData: false` a moins de
+ * `windowDays` jours de disponibilité réelle recensés (nouvelle variante, ou
+ * historique `InventorySnapshot` encore trop récent) — l'appelant ne doit
+ * JAMAIS traiter ces deux cas comme une vitesse fiable de 0.
  */
 export async function getVelocityByVariant(
   windowDays: number,
   filters: VelocityFilters = {},
-): Promise<Map<string, number>> {
-  const until = new Date();
-  const since = new Date();
-  since.setDate(since.getDate() - windowDays);
-  return velocityForRange(since, until, windowDays, filters);
+): Promise<Map<string, VelocityResult>> {
+  return velocityByAvailableDayRank(1, windowDays, filters);
 }
 
 /**
- * Vitesse de vente sur la fenêtre PRÉCÉDENTE de même durée (ex: jours -60 à
- * -30 si windowDays=30) — sert à détecter une accélération/décélération de
- * la demande. Voir docs/INSIGHTS.md, section 5 (tendance).
+ * Vitesse de vente sur le bloc de `windowDays` jours de disponibilité réelle
+ * PRÉCÉDENT immédiatement celui de `getVelocityByVariant` (rangs
+ * windowDays+1 à 2×windowDays) — sert à détecter une accélération/
+ * décélération de la demande. Voir docs/INSIGHTS.md, section 5 (tendance).
  */
 export async function getPriorVelocityByVariant(
   windowDays: number,
   filters: VelocityFilters = {},
-): Promise<Map<string, number>> {
-  const until = new Date();
-  until.setDate(until.getDate() - windowDays);
-  const since = new Date();
-  since.setDate(since.getDate() - windowDays * 2);
-  return velocityForRange(since, until, windowDays, filters);
+): Promise<Map<string, VelocityResult>> {
+  return velocityByAvailableDayRank(windowDays + 1, windowDays * 2, filters);
 }
 
 // Vitesse de vente "adaptative" (page Stock) — voir docs/INSIGHTS.md,

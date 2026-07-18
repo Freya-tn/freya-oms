@@ -15,7 +15,6 @@ import { YearSelector } from "@/components/YearSelector";
 export const dynamic = "force-dynamic";
 
 const DEFAULT_WINDOW_DAYS = 30;
-const TREND_WINDOW_DAYS = 90;
 
 export default async function B2bB2cPage({
   searchParams,
@@ -31,10 +30,10 @@ export default async function B2bB2cPage({
   const [totals, topProducts, revenueTrend, marginByChannel, vendors, monthlyChannel] = await Promise.all([
     getChannelTotals(windowDays, { vendor }),
     getTopProductsByChannel(windowDays, 5, { vendor }),
-    getRevenueTrend(TREND_WINDOW_DAYS),
+    getRevenueTrend(windowDays, { vendor }),
     getMarginByChannel(windowDays, { vendor }),
     getVendorList(),
-    getMonthlyChannelBreakdown(year),
+    getMonthlyChannelBreakdown(year, { vendor }),
   ]);
 
   const revenueItems = totals.map((t) => ({ id: t.channel, label: t.channel, value: t.revenue, color: CHANNEL_COLOR[t.channel] }));
@@ -53,7 +52,12 @@ export default async function B2bB2cPage({
         B2B vs B2C
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Commandes confirmées uniquement.
+        Comment ça marche : une commande est B2B si elle porte le tag Shopify &quot;B2B&quot;, B2C sinon - dérivé une seule
+        fois à la synchro, jamais recalculé ici. Commandes confirmées uniquement (paiement à la livraison :
+        beaucoup de commandes non confirmées/annulées sont exclues). Le CA sans filtre marque correspond
+        exactement aux rapports Shopify ; avec un filtre marque, il est recalculé ligne par ligne (légère
+        sous-estimation possible des remises panier non allouées par Shopify au niveau produit). Toutes les
+        courbes et tableaux ci-dessous suivent les filtres marque/période choisis.
       </Typography>
 
       <FilterBar vendors={vendors} defaultPeriod={DEFAULT_WINDOW_DAYS} />
@@ -61,7 +65,7 @@ export default async function B2bB2cPage({
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom>
-            CA confirmé ({TREND_WINDOW_DAYS} derniers jours)
+            CA confirmé ({windowDays} derniers jours)
           </Typography>
           <RevenueTrendChart data={revenueTrend} />
         </CardContent>

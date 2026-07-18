@@ -45,6 +45,13 @@ export default async function OverviewPage({
       <Typography variant="h4" component="h1" gutterBottom>
         Overview
       </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Comment ça marche : le CA, le panier moyen et le taux d&apos;annulation sur la période choisie sont
+        comparés à la période équivalente immédiatement précédente (ex : 30 derniers jours vs les 30 jours
+        d&apos;avant) - la flèche indique cette évolution, pas une moyenne historique. Seules les commandes
+        confirmées (payées et non annulées) comptent dans le CA. &quot;Alertes réappro&quot; et &quot;Produits dormants&quot; renvoient
+        vers leurs pages dédiées, où la méthodologie complète est expliquée.
+      </Typography>
 
       <SyncStatusBar statuses={syncStatuses} />
 

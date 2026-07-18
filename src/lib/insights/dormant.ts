@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { getVelocityByVariant } from "./velocity";
 
-const VELOCITY_WINDOW_DAYS = 60;
+export const VELOCITY_WINDOW_DAYS = 60;
 
 // Seuil de vitesse de vente en dessous duquel une variante est considérée
 // "dormante". À ajuster avec l'équipe une fois des données réelles
@@ -41,8 +41,20 @@ async function getLastSaleDateByVariant(): Promise<Map<string, Date>> {
   return new Map(rows.map((r) => [r.variantId, r.lastSaleAt]));
 }
 
+export type DormantStockResult = {
+  rows: DormantRow[];
+  /**
+   * Variantes en stock exclues du classement faute d'assez de jours de
+   * disponibilité réelle recensés (voir `VelocityResult.sufficientData` dans
+   * `velocity.ts`) — jamais classées "dormantes" par défaut/prudence.
+   * Décision équipe 2026-07-18 : mieux vaut ne rien affirmer sur ces
+   * variantes que de risquer un faux positif "dormant" faute de recul.
+   */
+  insufficientDataCount: number;
+};
+
 /** Variantes à rotation quasi nulle mais avec du stock immobilisé, triées par valeur décroissante. */
-export async function getDormantStock(filters: { vendor?: string } = {}): Promise<DormantRow[]> {
+export async function getDormantStockDetailed(filters: { vendor?: string } = {}): Promise<DormantStockResult> {
   const [variants, velocity, lastSaleByVariant] = await Promise.all([
     prisma.variant.findMany({
       where: {
@@ -64,9 +76,14 @@ export async function getDormantStock(filters: { vendor?: string } = {}): Promis
   ]);
 
   const rows: DormantRow[] = [];
+  let insufficientDataCount = 0;
   for (const variant of variants) {
-    const velocityPerDay = velocity.get(variant.id) ?? 0;
-    if (velocityPerDay >= SEUIL_DORMANT_UNITS_PER_DAY) continue;
+    const velocity_ = velocity.get(variant.id);
+    if (!velocity_ || !velocity_.sufficientData) {
+      insufficientDataCount += 1;
+      continue;
+    }
+    if (velocity_.velocityPerDay >= SEUIL_DORMANT_UNITS_PER_DAY) continue;
 
     const unitValue = variant.cost ?? variant.price;
     rows.push({
@@ -76,13 +93,18 @@ export async function getDormantStock(filters: { vendor?: string } = {}): Promis
       productTitle: variant.product.title,
       vendor: variant.product.vendor,
       inventoryQuantity: variant.inventoryQuantity,
-      velocityPerDay,
+      velocityPerDay: velocity_.velocityPerDay,
       stockValue: variant.inventoryQuantity * Number(unitValue),
       lastSaleAt: lastSaleByVariant.get(variant.id) ?? null,
     });
   }
 
-  return rows.sort((a, b) => b.stockValue - a.stockValue);
+  return { rows: rows.sort((a, b) => b.stockValue - a.stockValue), insufficientDataCount };
+}
+
+/** Voir `getDormantStockDetailed` — ne retourne que les lignes, pour les appelants qui n'ont pas besoin du compteur de données insuffisantes. */
+export async function getDormantStock(filters: { vendor?: string } = {}): Promise<DormantRow[]> {
+  return (await getDormantStockDetailed(filters)).rows;
 }
 
 export type DormantSummary = {

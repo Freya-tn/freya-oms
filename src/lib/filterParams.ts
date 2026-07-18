@@ -62,3 +62,13 @@ export function parseCoverageParam(value: string | undefined, fallback: number):
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(COVERAGE_DAYS_MAX, Math.max(COVERAGE_DAYS_MIN, Math.round(parsed)));
 }
+
+export const ANALYSIS_WINDOW_DAYS_MIN = 14;
+export const ANALYSIS_WINDOW_DAYS_MAX = 120;
+
+/** Parse le paramètre `window` (fenêtre d'analyse réappro, en jours de disponibilité réelle) — borné, avec repli. */
+export function parseAnalysisWindowParam(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(ANALYSIS_WINDOW_DAYS_MAX, Math.max(ANALYSIS_WINDOW_DAYS_MIN, Math.round(parsed)));
+}

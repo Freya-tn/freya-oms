@@ -14,22 +14,49 @@ export type OrderCountTrendPoint = {
   cancelled: number;
 };
 
-/** CA confirmé par jour, splitté par canal — pour un graphique en aires empilées (un seul axe). */
-export async function getRevenueTrend(windowDays: number): Promise<RevenueTrendPoint[]> {
+/**
+ * CA confirmé par jour, splitté par canal — pour un graphique en aires
+ * empilées (un seul axe). Filtrable par marque (redescend en SQL, voir
+ * docs/INSIGHTS.md, "Filtres marque et période") — sans filtre, `Order.subtotalPrice`
+ * (correspond exactement aux rapports Shopify) ; avec un filtre marque,
+ * somme par ligne de commande (seule option possible pour un total par
+ * produit — voir "CA : Order.subtotalPrice vs somme des lignes de commande").
+ */
+export async function getRevenueTrend(
+  windowDays: number,
+  filters: { vendor?: string } = {},
+): Promise<RevenueTrendPoint[]> {
   const since = daysAgo(windowDays);
 
-  const rows = await prisma.$queryRaw<Array<{ day: Date; channel: "B2B" | "B2C"; revenue: number }>>(Prisma.sql`
-    SELECT
-      date_trunc('day', o."orderCreatedAt") AS day,
-      o."channel" AS channel,
-      SUM(o."subtotalPrice")::float AS revenue
-    FROM "Order" o
-    WHERE o."isConfirmed" = true
-      AND o."cancelledAt" IS NULL
-      AND o."orderCreatedAt" >= ${since}
-    GROUP BY 1, 2
-    ORDER BY 1
-  `);
+  const rows = filters.vendor
+    ? await prisma.$queryRaw<Array<{ day: Date; channel: "B2B" | "B2C"; revenue: number }>>(Prisma.sql`
+        SELECT
+          date_trunc('day', o."orderCreatedAt") AS day,
+          o."channel" AS channel,
+          SUM(li."quantity" * li."unitPrice" - li."totalDiscount")::float AS revenue
+        FROM "OrderLineItem" li
+        JOIN "Order" o ON o.id = li."orderId"
+        JOIN "Variant" v ON v.id = li."variantId"
+        JOIN "Product" p ON p.id = v."productId"
+        WHERE o."isConfirmed" = true
+          AND o."cancelledAt" IS NULL
+          AND o."orderCreatedAt" >= ${since}
+          AND p.vendor = ${filters.vendor}
+        GROUP BY 1, 2
+        ORDER BY 1
+      `)
+    : await prisma.$queryRaw<Array<{ day: Date; channel: "B2B" | "B2C"; revenue: number }>>(Prisma.sql`
+        SELECT
+          date_trunc('day', o."orderCreatedAt") AS day,
+          o."channel" AS channel,
+          SUM(o."subtotalPrice")::float AS revenue
+        FROM "Order" o
+        WHERE o."isConfirmed" = true
+          AND o."cancelledAt" IS NULL
+          AND o."orderCreatedAt" >= ${since}
+        GROUP BY 1, 2
+        ORDER BY 1
+      `);
 
   const byDay = new Map<string, RevenueTrendPoint>();
   for (const row of rows) {

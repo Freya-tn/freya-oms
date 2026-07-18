@@ -24,8 +24,9 @@ const columns: GridColDef<DormantRow>[] = [
   { field: "inventoryQuantity", headerName: "Stock", width: 100, type: "number" },
   {
     field: "velocityPerDay",
-    headerName: "Ventes/jour (60j)",
-    width: 160,
+    headerName: "Ventes/jour (60j dispo)",
+    description: "Unités vendues par jour, calculées sur les 60 derniers jours où la variante a réellement eu du stock (pas 60 jours calendaires).",
+    width: 180,
     type: "number",
     valueFormatter: (value: number) => value.toFixed(3),
   },

@@ -1,14 +1,21 @@
 import { prisma } from "@/lib/db";
-import { getVelocityByVariant, getPriorVelocityByVariant } from "./velocity";
+import { getVelocityByVariant, getPriorVelocityByVariant, type VelocityResult } from "./velocity";
+import { ANALYSIS_WINDOW_DAYS_MAX, ANALYSIS_WINDOW_DAYS_MIN } from "@/lib/filterParams";
 
-const VELOCITY_WINDOW_DAYS = 30;
+// Fenêtre par défaut d'analyse (vitesse de vente / tendance) — réglable par
+// l'utilisateur via `filters.windowDays` (slider sur la page Réappro,
+// `?window=`, décision équipe 2026-07-18), cette constante n'est qu'un
+// défaut, jamais figée en dur dans les calculs. Bornes : voir
+// `ANALYSIS_WINDOW_DAYS_MIN`/`_MAX` dans `filterParams.ts`.
+export const VELOCITY_WINDOW_DAYS = 30;
 
-// Hypothèses globales v1 — voir docs/INSIGHTS.md, section 5. Pas de délai
-// fournisseur réel en base (pas de modèle Supplier pour l'instant), donc un
-// délai global est utilisé en attendant d'avoir cette donnée par marque/
-// fournisseur. À ajuster avec l'équipe.
-export const LEAD_TIME_DAYS = 14;
-export const SAFETY_STOCK_DAYS = 7;
+// Délai de sécurité global (temps fournisseur + marge de sécurité fusionnés
+// en une seule hypothèse, décision équipe 2026-07-18 : distinguer les deux
+// n'avait pas de sens tant qu'il n'y a pas de délai fournisseur réel en base
+// par marque — voir docs/INSIGHTS.md, section 5). Pas de modèle Supplier
+// pour l'instant, donc une hypothèse globale est utilisée en attendant
+// d'avoir cette donnée par marque/fournisseur.
+export const REORDER_SAFETY_DELAY_DAYS = 30;
 // Une commande doit couvrir au moins 3 mois de vente (décision équipe 2026-07-16).
 export const TARGET_COVERAGE_DAYS = 90;
 
@@ -43,25 +50,56 @@ function computeUrgency(inventoryQuantity: number, reorderPoint: number): Reorde
   return "good";
 }
 
-function computeTrend(current: number, prior: number): DemandTrend {
-  if (prior === 0) return current > 0 ? "new" : "unknown";
-  const ratio = current / prior;
+/**
+ * `prior` non fiable (absent ou moins d'un bloc complet de `windowDays` jours
+ * de disponibilité réelle recensés) -> "unknown" plutôt que "new" : on ne
+ * sait juste pas, ce n'est pas la même affirmation que "cette variante est
+ * neuve et n'a jamais vendu avant". Décision équipe 2026-07-18.
+ */
+function computeTrend(current: number, prior: VelocityResult | undefined): DemandTrend {
+  if (!prior || !prior.sufficientData) return "unknown";
+  if (prior.velocityPerDay === 0) return current > 0 ? "new" : "unknown";
+  const ratio = current / prior.velocityPerDay;
   if (ratio >= TREND_UP_RATIO) return "up";
   if (ratio <= TREND_DOWN_RATIO) return "down";
   return "stable";
 }
 
+export type ReorderSuggestionsResult = {
+  rows: ReorderRow[];
+  /**
+   * Variantes exclues faute d'assez de jours de disponibilité réelle
+   * recensés sur `windowDays` (voir `VelocityResult.sufficientData` dans
+   * `velocity.ts`) — jamais incluses avec une vitesse extrapolée sur un
+   * signal trop court. Décision équipe 2026-07-18 : mieux vaut ne rien
+   * suggérer que de suggérer une quantité basée sur un signal peu fiable.
+   */
+  insufficientDataCount: number;
+};
+
 /**
  * Suggestions de réapprovisionnement : uniquement les variantes qui se
- * vendent réellement (velocity > 0) — un produit dormant en rupture n'est
- * pas une urgence de rachat, c'est un problème de dormance (voir dormant.ts).
- * `trend` compare la vitesse des 30 derniers jours à celle des 30 jours
- * précédents (accélération/décélération de la demande).
+ * vendent réellement (velocity > 0) ET dont la vitesse est mesurée sur un
+ * bloc complet de `windowDays` jours de disponibilité réelle (sinon exclues,
+ * voir `insufficientDataCount`) — un produit dormant en rupture n'est pas
+ * une urgence de rachat, c'est un problème de dormance (voir dormant.ts).
+ * `trend` compare la vitesse du bloc de `windowDays` jours de disponibilité
+ * réelle le plus récent à celle du bloc précédent (accélération/
+ * décélération de la demande) — voir `getVelocityByVariant` dans
+ * `velocity.ts` pour la méthodologie "jours de disponibilité réelle" (corrige
+ * le bug du 2026-07-18 : un best-seller en rupture ne doit pas disparaître
+ * des suggestions faute de ventes DANS la fenêtre calendaire, il faut
+ * remonter jusqu'à sa dernière période de disponibilité réelle pour estimer
+ * sa vraie vitesse).
  */
-export async function getReorderSuggestions(
-  filters: { vendor?: string; targetCoverageDays?: number } = {},
-): Promise<ReorderRow[]> {
+export async function getReorderSuggestionsDetailed(
+  filters: { vendor?: string; targetCoverageDays?: number; windowDays?: number } = {},
+): Promise<ReorderSuggestionsResult> {
   const targetCoverageDays = filters.targetCoverageDays ?? TARGET_COVERAGE_DAYS;
+  const windowDays = Math.min(
+    ANALYSIS_WINDOW_DAYS_MAX,
+    Math.max(ANALYSIS_WINDOW_DAYS_MIN, filters.windowDays ?? VELOCITY_WINDOW_DAYS),
+  );
 
   const [variants, velocity, priorVelocity] = await Promise.all([
     prisma.variant.findMany({
@@ -74,16 +112,22 @@ export async function getReorderSuggestions(
         product: { select: { title: true, vendor: true, productType: true } },
       },
     }),
-    getVelocityByVariant(VELOCITY_WINDOW_DAYS, { vendor: filters.vendor }),
-    getPriorVelocityByVariant(VELOCITY_WINDOW_DAYS, { vendor: filters.vendor }),
+    getVelocityByVariant(windowDays, { vendor: filters.vendor }),
+    getPriorVelocityByVariant(windowDays, { vendor: filters.vendor }),
   ]);
 
   const rows: ReorderRow[] = [];
+  let insufficientDataCount = 0;
   for (const variant of variants) {
-    const velocityPerDay = velocity.get(variant.id) ?? 0;
+    const velocity_ = velocity.get(variant.id);
+    if (!velocity_ || !velocity_.sufficientData) {
+      insufficientDataCount += 1;
+      continue;
+    }
+    const velocityPerDay = velocity_.velocityPerDay;
     if (velocityPerDay <= 0) continue;
 
-    const reorderPoint = velocityPerDay * (LEAD_TIME_DAYS + SAFETY_STOCK_DAYS);
+    const reorderPoint = velocityPerDay * REORDER_SAFETY_DELAY_DAYS;
     const suggestedOrderQty = Math.max(
       0,
       Math.round(velocityPerDay * targetCoverageDays - variant.inventoryQuantity),
@@ -103,7 +147,7 @@ export async function getReorderSuggestions(
       category: variant.product.productType,
       inventoryQuantity: variant.inventoryQuantity,
       velocityPerDay,
-      trend: computeTrend(velocityPerDay, priorVelocity.get(variant.id) ?? 0),
+      trend: computeTrend(velocityPerDay, priorVelocity.get(variant.id)),
       reorderPoint,
       suggestedOrderQty,
       daysUntilStockout: variant.inventoryQuantity / velocityPerDay,
@@ -112,7 +156,15 @@ export async function getReorderSuggestions(
   }
 
   const urgencyRank: Record<ReorderUrgency, number> = { critical: 0, serious: 1, warning: 2, good: 3 };
-  return rows.sort((a, b) => urgencyRank[a.urgency] - urgencyRank[b.urgency] || a.daysUntilStockout! - b.daysUntilStockout!);
+  rows.sort((a, b) => urgencyRank[a.urgency] - urgencyRank[b.urgency] || a.daysUntilStockout! - b.daysUntilStockout!);
+  return { rows, insufficientDataCount };
+}
+
+/** Voir `getReorderSuggestionsDetailed` — ne retourne que les lignes, pour les appelants qui n'ont pas besoin du compteur de données insuffisantes. */
+export async function getReorderSuggestions(
+  filters: { vendor?: string; targetCoverageDays?: number; windowDays?: number } = {},
+): Promise<ReorderRow[]> {
+  return (await getReorderSuggestionsDetailed(filters)).rows;
 }
 
 export type SupplierOrderSummary = {

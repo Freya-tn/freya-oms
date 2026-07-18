@@ -146,27 +146,49 @@ export type MonthlyChannelBreakdown = {
 /**
  * CA confirmé par mois pour UNE année donnée, splitté B2B/B2C — répond à "on
  * fait combien en moyenne par mois en B2B et en B2C cette année, et sur les
- * années précédentes ?" (retour utilisateur 2026-07-18). Sans filtre marque,
- * comme `getChannelTotals` : `Order.subtotalPrice` (voir docs/INSIGHTS.md,
- * "CA : Order.subtotalPrice vs somme des lignes de commande").
+ * années précédentes ?" (retour utilisateur 2026-07-18). Filtrable par marque
+ * (redescend en SQL, voir docs/INSIGHTS.md, "Filtres marque et période") —
+ * sans filtre, `Order.subtotalPrice` (voir docs/INSIGHTS.md, "CA :
+ * Order.subtotalPrice vs somme des lignes de commande") ; avec un filtre
+ * marque, somme par ligne de commande (seule option possible pour un total
+ * par produit).
  *
  * `avgPerMonth` divise par `monthsWithData`, PAS toujours 12 : sur l'année en
  * cours, diviser par 12 sous-estimerait la moyenne réelle des mois déjà
  * passés (les mois futurs n'ont simplement pas encore de ligne).
  */
-export async function getMonthlyChannelBreakdown(year: number): Promise<MonthlyChannelBreakdown> {
+export async function getMonthlyChannelBreakdown(
+  year: number,
+  filters: { vendor?: string } = {},
+): Promise<MonthlyChannelBreakdown> {
   const [rows, yearRows] = await Promise.all([
-    prisma.$queryRaw<Array<{ month: number; channel: "B2B" | "B2C"; revenue: number }>>(Prisma.sql`
-      SELECT
-        EXTRACT(MONTH FROM "orderCreatedAt")::int AS month,
-        "channel" AS channel,
-        SUM("subtotalPrice")::float AS revenue
-      FROM "Order"
-      WHERE "isConfirmed" = true
-        AND "cancelledAt" IS NULL
-        AND EXTRACT(YEAR FROM "orderCreatedAt")::int = ${year}
-      GROUP BY 1, 2
-    `),
+    filters.vendor
+      ? prisma.$queryRaw<Array<{ month: number; channel: "B2B" | "B2C"; revenue: number }>>(Prisma.sql`
+          SELECT
+            EXTRACT(MONTH FROM o."orderCreatedAt")::int AS month,
+            o."channel" AS channel,
+            SUM(li."quantity" * li."unitPrice" - li."totalDiscount")::float AS revenue
+          FROM "OrderLineItem" li
+          JOIN "Order" o ON o.id = li."orderId"
+          JOIN "Variant" v ON v.id = li."variantId"
+          JOIN "Product" p ON p.id = v."productId"
+          WHERE o."isConfirmed" = true
+            AND o."cancelledAt" IS NULL
+            AND EXTRACT(YEAR FROM o."orderCreatedAt")::int = ${year}
+            AND p.vendor = ${filters.vendor}
+          GROUP BY 1, 2
+        `)
+      : prisma.$queryRaw<Array<{ month: number; channel: "B2B" | "B2C"; revenue: number }>>(Prisma.sql`
+          SELECT
+            EXTRACT(MONTH FROM "orderCreatedAt")::int AS month,
+            "channel" AS channel,
+            SUM("subtotalPrice")::float AS revenue
+          FROM "Order"
+          WHERE "isConfirmed" = true
+            AND "cancelledAt" IS NULL
+            AND EXTRACT(YEAR FROM "orderCreatedAt")::int = ${year}
+          GROUP BY 1, 2
+        `),
     prisma.$queryRaw<Array<{ year: number }>>(Prisma.sql`
       SELECT DISTINCT EXTRACT(YEAR FROM "orderCreatedAt")::int AS year
       FROM "Order"

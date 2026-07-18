@@ -161,8 +161,11 @@ export default async function ProduitsPage({
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Chaque variante (taille/format compris) est classée en 3 groupes selon sa contribution au chiffre
-        d&apos;affaires total : <strong>A</strong> regroupe les produits qui, ensemble, font déjà 80% du CA - à ne
-        jamais laisser en rupture ; <strong>B</strong> les 15% suivants ; <strong>C</strong> le reste, une
+        d&apos;affaires total : <strong>A</strong>{" "}
+        regroupe les produits qui, ensemble, font déjà 80% du CA - à ne
+        jamais laisser en rupture ; <strong>B</strong>{" "}
+        les 15% suivants ; <strong>C</strong>{" "}
+        le reste, une
         contribution marginale. Utile pour les décisions de réapprovisionnement (voir la page Réapprovisionnement).
         Attention : un produit qui vend beaucoup (tier A) n&apos;est pas forcément celui qui rapporte le plus une fois
         son coût déduit - voir le classement par marge ci-dessous.

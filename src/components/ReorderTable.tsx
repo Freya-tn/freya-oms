@@ -21,19 +21,21 @@ const URGENCY_META: Record<ReorderUrgency, { label: string; color: string; icon:
   good: { label: "OK", color: STATUS.good, icon: <ScheduleIcon fontSize="small" /> },
 };
 
-const TREND_META: Record<DemandTrend, { label: string; icon: React.ReactElement; color: string }> = {
-  up: { label: "Demande en hausse (vs 30j précédents)", icon: <TrendingUpIcon fontSize="small" />, color: STATUS.good },
-  down: { label: "Demande en baisse (vs 30j précédents)", icon: <TrendingDownIcon fontSize="small" />, color: STATUS.serious },
-  stable: { label: "Demande stable", icon: <TrendingFlatIcon fontSize="small" />, color: "text.secondary" },
-  new: { label: "Nouvelle demande (rien il y a 30-60j)", icon: <FiberNewIcon fontSize="small" />, color: STATUS.good },
-  unknown: { label: "Historique insuffisant", icon: <HelpOutlineIcon fontSize="small" />, color: "text.secondary" },
-};
+function trendMeta(windowDays: number): Record<DemandTrend, { label: string; icon: React.ReactElement; color: string }> {
+  return {
+    up: { label: `Demande en hausse (vs ${windowDays}j de disponibilité précédents)`, icon: <TrendingUpIcon fontSize="small" />, color: STATUS.good },
+    down: { label: `Demande en baisse (vs ${windowDays}j de disponibilité précédents)`, icon: <TrendingDownIcon fontSize="small" />, color: STATUS.serious },
+    stable: { label: "Demande stable", icon: <TrendingFlatIcon fontSize="small" />, color: "text.secondary" },
+    new: { label: `Nouvelle demande (rien sur les ${windowDays}j de disponibilité précédents)`, icon: <FiberNewIcon fontSize="small" />, color: STATUS.good },
+    unknown: { label: "Historique de disponibilité insuffisant pour comparer", icon: <HelpOutlineIcon fontSize="small" />, color: "text.secondary" },
+  };
+}
 
 export type CategorySeasonality = { index: number; trusted: boolean };
 
-function buildColumns(categorySeasonality: Record<string, CategorySeasonality>): GridColDef<ReorderRow>[] {
+function buildColumns(categorySeasonality: Record<string, CategorySeasonality>, windowDays: number): GridColDef<ReorderRow>[] {
   return [
-    ...BASE_COLUMNS,
+    ...baseColumns(windowDays),
     {
       field: "category",
       headerName: "Saisonnalité (mois prochain)",
@@ -64,91 +66,97 @@ function buildColumns(categorySeasonality: Record<string, CategorySeasonality>):
   ];
 }
 
-const BASE_COLUMNS: GridColDef<ReorderRow>[] = [
-  {
-    field: "urgency",
-    headerName: "Urgence",
-    width: 150,
-    renderCell: (params) => {
-      const meta = URGENCY_META[params.value as ReorderUrgency];
-      return (
-        <Chip
-          icon={meta.icon}
-          label={meta.label}
-          size="small"
-          sx={{ bgcolor: meta.color, color: "#fff", "& .MuiChip-icon": { color: "#fff" } }}
-        />
-      );
+function baseColumns(windowDays: number): GridColDef<ReorderRow>[] {
+  const trendLabels = trendMeta(windowDays);
+  return [
+    {
+      field: "urgency",
+      headerName: "Urgence",
+      width: 150,
+      renderCell: (params) => {
+        const meta = URGENCY_META[params.value as ReorderUrgency];
+        return (
+          <Chip
+            icon={meta.icon}
+            label={meta.label}
+            size="small"
+            sx={{ bgcolor: meta.color, color: "#fff", "& .MuiChip-icon": { color: "#fff" } }}
+          />
+        );
+      },
     },
-  },
-  {
-    field: "trend",
-    headerName: "Tendance",
-    width: 90,
-    renderCell: (params) => {
-      const meta = TREND_META[params.value as DemandTrend];
-      return (
-        <Tooltip title={meta.label}>
-          <span style={{ color: meta.color, display: "flex", alignItems: "center", height: "100%" }}>{meta.icon}</span>
-        </Tooltip>
-      );
+    {
+      field: "trend",
+      headerName: "Tendance",
+      width: 90,
+      renderCell: (params) => {
+        const meta = trendLabels[params.value as DemandTrend];
+        return (
+          <Tooltip title={meta.label}>
+            <span style={{ color: meta.color, display: "flex", alignItems: "center", height: "100%" }}>{meta.icon}</span>
+          </Tooltip>
+        );
+      },
     },
-  },
-  { field: "sku", headerName: "SKU", width: 130 },
-  { field: "vendor", headerName: "Marque", width: 130 },
-  {
-    field: "productTitle",
-    headerName: "Produit",
-    flex: 1,
-    minWidth: 200,
-    renderCell: (params) => (
-      <MuiLink component={NextLink} href={`/produit/${params.row.variantId}`} underline="hover">
-        {params.value}
-      </MuiLink>
-    ),
-  },
-  { field: "title", headerName: "Variante", flex: 1, minWidth: 140 },
-  { field: "inventoryQuantity", headerName: "Stock", width: 90, type: "number" },
-  {
-    field: "velocityPerDay",
-    headerName: "Ventes/jour",
-    width: 120,
-    type: "number",
-    valueFormatter: (value: number) => value.toFixed(2),
-  },
-  {
-    field: "reorderPoint",
-    headerName: "Seuil réappro",
-    width: 130,
-    type: "number",
-    valueFormatter: (value: number) => Math.round(value).toString(),
-  },
-  {
-    field: "suggestedOrderQty",
-    headerName: "Qté suggérée",
-    width: 140,
-    type: "number",
-    renderCell: (params) => <strong>{params.value as number}</strong>,
-  },
-  {
-    field: "daysUntilStockout",
-    headerName: "Jours avant rupture",
-    width: 160,
-    valueFormatter: (value: number | null) => (value === null ? "-" : Math.floor(value).toString()),
-  },
-];
+    { field: "sku", headerName: "SKU", width: 130 },
+    { field: "vendor", headerName: "Marque", width: 130 },
+    {
+      field: "productTitle",
+      headerName: "Produit",
+      flex: 1,
+      minWidth: 200,
+      renderCell: (params) => (
+        <MuiLink component={NextLink} href={`/produit/${params.row.variantId}`} underline="hover">
+          {params.value}
+        </MuiLink>
+      ),
+    },
+    { field: "title", headerName: "Variante", flex: 1, minWidth: 140 },
+    { field: "inventoryQuantity", headerName: "Stock", width: 90, type: "number" },
+    {
+      field: "velocityPerDay",
+      headerName: `Ventes/jour (${windowDays}j dispo)`,
+      description: `Unités vendues par jour, calculées sur les ${windowDays} derniers jours où la variante a réellement eu du stock (pas ${windowDays} jours calendaires).`,
+      width: 160,
+      type: "number",
+      valueFormatter: (value: number) => value.toFixed(2),
+    },
+    {
+      field: "reorderPoint",
+      headerName: "Seuil réappro",
+      width: 130,
+      type: "number",
+      valueFormatter: (value: number) => Math.round(value).toString(),
+    },
+    {
+      field: "suggestedOrderQty",
+      headerName: "Qté suggérée",
+      width: 140,
+      type: "number",
+      renderCell: (params) => <strong>{params.value as number}</strong>,
+    },
+    {
+      field: "daysUntilStockout",
+      headerName: "Jours avant rupture",
+      width: 160,
+      valueFormatter: (value: number | null) => (value === null ? "-" : Math.floor(value).toString()),
+    },
+  ];
+}
 
 export function ReorderTable({
   rows,
   categorySeasonality = {},
+  windowDays,
 }: {
   rows: ReorderRow[];
   categorySeasonality?: Record<string, CategorySeasonality>;
+  windowDays: number;
 }) {
   return (
     <DataGrid
       rows={rows}
-      columns={buildColumns(categorySeasonality)}
+      columns={buildColumns(categorySeasonality, windowDays)}
       getRowId={(row) => row.variantId}
       initialState={{
         pagination: { paginationModel: { pageSize: 25 } },
