@@ -3,8 +3,14 @@
 
 const numberFormatter = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 });
 
-export function formatCurrency(value: number): string {
-  return `${numberFormatter.format(value)} TND`;
+/**
+ * `maximumFractionDigits` par défaut à 0 (montants ronds partout ailleurs) —
+ * passer 2 pour un coût unitaire calculé (ex: moyenne pondérée d'achat, page
+ * Réception d'achats) où arrondir à l'entier masquerait la précision que
+ * l'utilisateur veut justement pouvoir vérifier.
+ */
+export function formatCurrency(value: number, maximumFractionDigits = 0): string {
+  return `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits }).format(value)} TND`;
 }
 
 export function formatNumber(value: number): string {

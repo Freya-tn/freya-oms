@@ -21,6 +21,7 @@ import CategoryIcon from "@mui/icons-material/CategoryOutlined";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOffOutlined";
 import NotificationsActiveIcon from "@mui/icons-material/NotificationsActiveOutlined";
 import TrendingUpIcon from "@mui/icons-material/TrendingUpOutlined";
+import MoveToInboxIcon from "@mui/icons-material/MoveToInboxOutlined";
 import ArrowBackIcon from "@mui/icons-material/ArrowBackOutlined";
 
 // Portail Freya (racine du hostname Tailscale partagé, voir
@@ -34,6 +35,7 @@ const NAV_ITEMS = [
   { href: "/stock", label: "Stock", icon: Inventory2Icon },
   { href: "/previsions", label: "Prévisions", icon: TrendingUpIcon },
   { href: "/reorder", label: "Réapprovisionnement", icon: ShoppingCartIcon },
+  { href: "/reception-achats", label: "Réception d'achats", icon: MoveToInboxIcon },
   { href: "/produits", label: "Produits", icon: CategoryIcon },
   { href: "/b2b-b2c", label: "B2B vs B2C", icon: CompareArrowsIcon },
   { href: "/black-market", label: "Déclaré vs black", icon: VisibilityOffIcon },
