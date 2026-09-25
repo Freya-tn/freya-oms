@@ -105,7 +105,10 @@ Depuis le 2026-07-18, freyaOMS n'est plus le seul outil interne accessible par T
 
 **Freya Hub** (SPA statique, pas de notion de session serveur) est gaté différemment : `location /compta/` sur nginx utilise `auth_request` vers `GET /api/auth/verify` (nouvelle route sur le portail, appelle juste `auth()`, 200/401, pas de DB). Point d'attention nginx qui a coûté un vrai bug (2026-07-18) : la sous-requête interne doit explicitement forwarder `Cookie` (`proxy_set_header Cookie $http_cookie;`, pas transmis de façon fiable par défaut) **et** `Host`/`X-Forwarded-Proto` (sans ça, NextAuth voit `Host: localhost:3002` au lieu du vrai hostname et rejette une session pourtant valide - silencieusement, la sous-requête renvoie juste 401). `error_page 401 = @portal_login;` redirige vers `/login` plutôt que d'afficher un 401 brut.
 
-**`api.freya-hub.fr` (le backend de Freya Hub, port 3000) reste public, volontairement** : un webhook Shopify l'appelle depuis l'extérieur. Seul le FRONTEND (`freya-hub.fr`, les fichiers statiques) est coupé du public et déplacé sous `/compta` - ne jamais toucher au vhost `api.freya-hub.fr`.
+**Backend de Freya Hub (`APIs/shopify-back`, port 3000)** — depuis le 2026-09-25 :
+- Le front `/compta` l'appelle par **`/compta-api/`** sur le même hostname Tailscale, avec le même `auth_request` que `/compta/` (session du portail). `VITE_API_URL=/compta-api/` dans `freya-front/.env.production`.
+- **`api.freya-hub.fr` reste public mais ne sert plus que trois routes** (toutes les autres répondent 404) : `POST /invoices/create` et `POST /invoices/credit/create` (webhooks Shopify, signature `X-Shopify-Hmac-Sha256` vérifiée par l'API avec `SHOPIFY_WEBHOOK_SECRET`, requête refusée si `SHOPIFY_WEBHOOK_ENFORCE=true`), et `GET /shopify/products` réservé à l'IP du serveur Freya Pro (`15.188.66.87`, lecture du stock entrepôt). Ajouter une route publique = une `location` explicite dans ce vhost.
+- L'API n'écoute plus que sur `127.0.0.1:3000` : le port n'est plus joignable directement depuis Internet.
 
 **Nouveau serveur Postgres** : Freya Portal a sa propre base (`freyaportal`, même instance Docker que `freyaoms`, rôle Postgres séparé) - jamais de migration croisée entre les deux projets.
 
